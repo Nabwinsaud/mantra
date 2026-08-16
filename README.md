@@ -44,8 +44,8 @@ strings and comments are handled by the PostgreSQL tokenizer.
 The SQL editor uses PostgreSQL-aware tokenization for syntax colors. Completion combines SQL
 keywords with schemas, tables, columns, `schema.table`, and `table.column` names loaded from the
 connected database, ranked with Nucleo's fuzzy matcher. SQL aliases are scoped to their source
-table, so `FROM user_roles ur ... ur.` completes as `ur.userId`, not `user_roles.userId` or an
-unrelated table's column.
+table, so `FROM user_roles ur ... ur.` completes as `ur."userId"`, not an unrelated table's
+column. Mixed-case PostgreSQL identifiers are quoted automatically to prevent case folding.
 
 The Results panel supports selected-cell navigation with `h/j/k/l`, horizontal column paging,
 vertical row scrolling, row numbers, NULL styling, and native rendering for UUID, date/time,

@@ -135,7 +135,7 @@ fn candidates_for_alias(
             columns
                 .into_iter()
                 .take(6)
-                .map(|column| format!("{qualifier}.{column}"))
+                .map(|column| format!("{qualifier}.{}", postgres_identifier(&column)))
                 .collect(),
         );
     }
@@ -150,9 +150,24 @@ fn candidates_for_alias(
         .match_list(columns, &mut matcher)
         .into_iter()
         .take(6)
-        .map(|(column, _)| format!("{qualifier}.{column}"))
+        .map(|(column, _)| format!("{qualifier}.{}", postgres_identifier(&column)))
         .collect(),
     )
+}
+
+fn postgres_identifier(identifier: &str) -> String {
+    let safe = identifier
+        .chars()
+        .next()
+        .is_some_and(|character| character.is_ascii_lowercase() || character == '_')
+        && identifier.chars().all(|character| {
+            character.is_ascii_lowercase() || character.is_ascii_digit() || character == '_'
+        });
+    if safe {
+        identifier.into()
+    } else {
+        format!("\"{}\"", identifier.replace('"', "\"\""))
+    }
 }
 
 fn aliases(source: &str) -> Vec<(String, String)> {
@@ -230,7 +245,7 @@ mod tests {
         ];
         let sql = "SELECT * FROM user_roles ur JOIN users u ON ur.user";
         let items = candidates(sql, sql.len(), &all, &[]);
-        assert_eq!(items, vec!["ur.userId"]);
+        assert_eq!(items, vec!["ur.\"userId\""]);
     }
 
     #[test]
@@ -243,5 +258,12 @@ mod tests {
         let sql = "SELECT * FROM user_roles ur JOIN users u ON u.";
         let items = candidates(sql, sql.len(), &all, &[]);
         assert_eq!(items, vec!["u.email", "u.id"]);
+    }
+
+    #[test]
+    fn quotes_identifiers_that_postgres_would_case_fold() {
+        assert_eq!(postgres_identifier("created_at"), "created_at");
+        assert_eq!(postgres_identifier("createdAt"), "\"createdAt\"");
+        assert_eq!(postgres_identifier("order-item"), "\"order-item\"");
     }
 }
