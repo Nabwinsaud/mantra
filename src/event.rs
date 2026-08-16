@@ -1,11 +1,15 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
-use crate::{action::Action, app::Mode};
+use crate::{
+    action::Action,
+    app::{Focus, Mode},
+};
 
 pub fn map_key_event(
     key: KeyEvent,
     sequence: &mut Option<char>,
     mode: Mode,
+    focus: Focus,
     help_visible: bool,
     overlay_active: bool,
 ) -> Option<Action> {
@@ -82,6 +86,7 @@ pub fn map_key_event(
 
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
+            KeyCode::Char('n') if focus == Focus::Editor => Some(Action::NewQueryTab),
             KeyCode::Char('n') => Some(Action::MoveDown),
             KeyCode::Char('p') => Some(Action::MoveUp),
             KeyCode::Char('h') | KeyCode::Left => Some(Action::FocusLeft),
@@ -120,6 +125,7 @@ pub fn map_key_event(
         }
         return match (pending, key.code) {
             (' ', KeyCode::Char('r')) => Some(Action::RunQuery),
+            (' ', KeyCode::Char('n')) => Some(Action::NewQueryTab),
             (' ', KeyCode::Char('?')) => Some(Action::ToggleHelp),
             ('f', KeyCode::Char('f')) => Some(Action::OpenSavedQueryFinder),
             ('f', KeyCode::Char('h')) => Some(Action::OpenHistoryFinder),
@@ -189,6 +195,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Normal,
+                Focus::Editor,
                 false,
                 false,
             ),
@@ -199,6 +206,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Normal,
+                Focus::Editor,
                 false,
                 false,
             ),
@@ -214,6 +222,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Insert,
+                Focus::Editor,
                 false,
                 false,
             ),
@@ -229,6 +238,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
                 &mut sequence,
                 Mode::Insert,
+                Focus::Editor,
                 false,
                 false,
             ),
@@ -244,6 +254,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Normal,
+                Focus::Editor,
                 false,
                 false,
             ),
@@ -254,6 +265,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Normal,
+                Focus::Editor,
                 false,
                 false,
             ),
@@ -269,6 +281,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
                 &mut sequence,
                 Mode::Normal,
+                Focus::Editor,
                 false,
                 false,
             ),
@@ -284,6 +297,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
                 &mut sequence,
                 Mode::Insert,
+                Focus::Editor,
                 false,
                 false,
             ),
@@ -305,6 +319,7 @@ mod tests {
                         KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
                         &mut sequence,
                         Mode::Normal,
+                        Focus::Editor,
                         false,
                         false,
                     ),
@@ -316,6 +331,7 @@ mod tests {
                     KeyEvent::new(KeyCode::Char(last_key), KeyModifiers::NONE),
                     &mut sequence,
                     Mode::Normal,
+                    Focus::Editor,
                     false,
                     false,
                 ),
@@ -332,6 +348,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Normal,
+                Focus::Editor,
                 false,
                 true,
             ),
@@ -342,6 +359,7 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
                 &mut sequence,
                 Mode::Normal,
+                Focus::Editor,
                 false,
                 true,
             ),
@@ -358,6 +376,7 @@ mod tests {
                     KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
                     &mut sequence,
                     Mode::Normal,
+                    Focus::Editor,
                     false,
                     false,
                 ),
@@ -368,11 +387,39 @@ mod tests {
                     KeyEvent::new(KeyCode::Char(last_key), KeyModifiers::NONE),
                     &mut sequence,
                     Mode::Normal,
+                    Focus::Editor,
                     false,
                     false,
                 ),
                 Some(expected)
             );
         }
+    }
+
+    #[test]
+    fn control_n_opens_a_buffer_only_from_normal_editor_mode() {
+        let mut sequence = None;
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::NewQueryTab)
+        );
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Explorer,
+                false,
+                false,
+            ),
+            Some(Action::MoveDown)
+        );
     }
 }

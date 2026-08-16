@@ -16,6 +16,7 @@ pub enum Action {
     FocusEditor,
     FocusResults,
     FocusQueryTab(usize),
+    NewQueryTab,
     NextQueryTab,
     PreviousQueryTab,
     ClickExplorerNode(usize),

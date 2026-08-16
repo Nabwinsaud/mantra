@@ -627,7 +627,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         })
         .unwrap_or_default();
     let hint = if app.key_sequence == Some(' ') {
-        "LEADER  r Run  f Find  ? Help"
+        "LEADER  n New query  •  r Run  •  f Find  •  ? Help"
     } else if app.key_sequence == Some('f') {
         "LEADER f…  f Saved queries  •  h History  •  s Save as  •  Esc Cancel"
     } else if app.key_sequence == Some('d') {
@@ -637,7 +637,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     } else if app.mode == Mode::Insert {
         "Esc Normal  •  type to edit"
     } else {
-        "1 Explorer  2 SQL  3 Results  •  Ctrl-s Save  •  Space ff/fh Find  •  ? Help"
+        "1 Explorer  2 SQL  3 Results  •  Ctrl-n New  •  Ctrl-s Save  •  Space ff/fh Find"
     };
     let message = app
         .status_message
@@ -855,6 +855,10 @@ fn draw_help(frame: &mut Frame) {
         key_line("Esc", "Return to NORMAL mode / close this window"),
         key_line("Ctrl-Enter / Space r", "Run statement under cursor"),
         key_line("Ctrl-s", "Save or update the current query"),
+        key_line(
+            "Ctrl-n / Space n",
+            "New SQL buffer (from NORMAL editor mode)",
+        ),
         key_line("Space f f", "Find saved queries for this database"),
         key_line("Space f h", "Search query history"),
         key_line("Space f s", "Save current SQL as a new query"),

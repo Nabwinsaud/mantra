@@ -443,6 +443,10 @@ impl App {
             Action::FocusEditor => self.focus = Focus::Editor,
             Action::FocusResults => self.focus = Focus::Results,
             Action::FocusQueryTab(index) => self.activate_query_tab(index),
+            Action::NewQueryTab => {
+                self.open_scratch_tab(String::new());
+                self.status_message = Some("Opened a new SQL buffer".into());
+            }
             Action::NextQueryTab => {
                 let next = (self.active_query_tab + 1) % self.query_tabs.len();
                 self.activate_query_tab(next);
@@ -1396,6 +1400,22 @@ mod tests {
         assert_eq!(app.saved_query_name.as_deref(), Some("First"));
         assert!(app.query.ends_with("-- edited"));
         assert!(app.active_query_is_modified());
+    }
+
+    #[tokio::test]
+    async fn new_query_tab_opens_an_empty_independent_buffer() {
+        let mut app = app();
+        app.query = "SELECT important_data;".into();
+        app.cursor = app.query.len();
+
+        app.update(Action::NewQueryTab).await;
+
+        assert_eq!(app.query_tabs.len(), 2);
+        assert_eq!(app.active_query_tab, 1);
+        assert!(app.query.is_empty());
+        assert_eq!(app.saved_query_id, None);
+        app.update(Action::PreviousQueryTab).await;
+        assert_eq!(app.query, "SELECT important_data;");
     }
 
     #[tokio::test]

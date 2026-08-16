@@ -47,6 +47,7 @@ async fn main() -> Result<()> {
                             key,
                             &mut app.key_sequence,
                             app.mode,
+                            app.focus,
                             app.help_visible,
                             overlay_active,
                         ) {

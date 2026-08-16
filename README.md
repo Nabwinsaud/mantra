@@ -28,6 +28,7 @@ The connection URL is used only in memory and is never displayed or logged.
 - `Enter` in INSERT mode: accept completion, or insert a newline when none is shown
 - `Ctrl-Enter` or `<leader>r`: run the statement under the cursor and focus Results
 - `Ctrl-s`: save the current query; the first save asks for a name
+- `Ctrl-n` in the NORMAL SQL editor, or `<leader>n`: open a new empty query tab
 - `<leader>ff`: fuzzy-find saved queries for the current project and database
 - `<leader>fh`: fuzzy-find automatically recorded query history
 - `<leader>fs`: save the current SQL as a new query instead of updating the opened one
