@@ -1,6 +1,6 @@
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Margin, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Clear, Padding, Paragraph, Row, Table, Wrap},
@@ -8,17 +8,21 @@ use ratatui::{
 
 use crate::{
     action::Action,
-    app::{App, ConnectionState, Focus, Mode},
+    app::{App, ConnectionState, Focus, InspectorSection, Mode},
 };
 
-pub fn mouse_action(column: u16, row: u16, width: u16, height: u16) -> Action {
+pub fn mouse_action(column: u16, row: u16, width: u16, height: u16, app: &App) -> Action {
     let content_top: u16 = 3;
     let content_height = height.saturating_sub(4);
     let top_height = content_height.saturating_mul(58) / 100;
     if row < content_top.saturating_add(top_height) {
         if column < width.saturating_mul(30) / 100 {
             if row >= content_top.saturating_add(1) {
-                Action::ClickExplorerNode(row.saturating_sub(content_top + 1) as usize)
+                let visible_height = top_height.saturating_sub(2) as usize;
+                let scroll = app
+                    .explorer_selection
+                    .saturating_sub(visible_height.saturating_sub(1));
+                Action::ClickExplorerNode(scroll + row.saturating_sub(content_top + 1) as usize)
             } else {
                 Action::FocusExplorer
             }
@@ -158,6 +162,18 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &App) {
 }
 
 fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
+    if app.inspector_loading {
+        frame.render_widget(
+            Paragraph::new("Loading table metadata…")
+                .block(panel_block("Table Inspector", app.focus == Focus::Results)),
+            area,
+        );
+        return;
+    }
+    if app.inspector.is_some() {
+        draw_table_inspector(frame, area, app);
+        return;
+    }
     let position = app.result.as_ref().map_or_else(String::new, |result| {
         format!(
             "  row {}/{}  col {}/{}",
@@ -273,6 +289,179 @@ fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
             area,
         );
     }
+}
+
+fn draw_table_inspector(frame: &mut Frame, area: Rect, app: &App) {
+    let details = app.inspector.as_ref().expect("inspector checked by caller");
+    let title = format!("Table Inspector  {}.{}", details.schema, details.name);
+    frame.render_widget(panel_block(&title, app.focus == Focus::Results), area);
+    let inner = area.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    let sections = Layout::vertical([Constraint::Length(2), Constraint::Min(1)]).split(inner);
+    let tabs = [
+        (InspectorSection::Overview, " Overview "),
+        (InspectorSection::Columns, " Columns "),
+        (InspectorSection::Constraints, " Constraints "),
+        (InspectorSection::Indexes, " Indexes "),
+    ];
+    let tab_line = Line::from(
+        tabs.into_iter()
+            .flat_map(|(section, label)| {
+                let style = if app.inspector_section == section {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::Cyan)
+                };
+                [Span::styled(label, style), Span::raw(" ")]
+            })
+            .collect::<Vec<_>>(),
+    );
+    frame.render_widget(
+        Paragraph::new(tab_line)
+            .block(Block::default().title(" [ / ] switch · Esc close · p preview ")),
+        sections[0],
+    );
+
+    match app.inspector_section {
+        InspectorSection::Overview => {
+            let overview = vec![
+                Line::from(vec![
+                    Span::styled("Qualified name  ", Style::default().fg(Color::DarkGray)),
+                    Span::styled(
+                        format!("{}.{}", details.schema, details.name),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from(""),
+                metric_line(
+                    "Estimated rows",
+                    if details.estimated_rows < 0 {
+                        "not analyzed".into()
+                    } else {
+                        details.estimated_rows.to_string()
+                    },
+                ),
+                metric_line("Columns", details.columns.len().to_string()),
+                metric_line("Constraints", details.constraints.len().to_string()),
+                metric_line("Indexes", details.indexes.len().to_string()),
+                Line::from(""),
+                metric_line("Table size", details.table_size.clone()),
+                metric_line("Index size", details.indexes_size.clone()),
+                metric_line("Total size", details.total_size.clone()),
+            ];
+            frame.render_widget(
+                Paragraph::new(overview).block(
+                    Block::default()
+                        .title(" PostgreSQL Storage ")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::DarkGray))
+                        .padding(Padding::uniform(1)),
+                ),
+                sections[1],
+            );
+        }
+        InspectorSection::Columns => {
+            let header = Row::new(["#", "Column", "Type", "Null", "Key", "Default", "Comment"])
+                .style(
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                );
+            let rows = details.columns.iter().enumerate().map(|(index, column)| {
+                Row::new([
+                    (index + 1).to_string(),
+                    column.name.clone(),
+                    column.data_type.clone(),
+                    if column.nullable {
+                        "YES".into()
+                    } else {
+                        "NO".into()
+                    },
+                    column.key.clone().unwrap_or_default(),
+                    column.default.clone().unwrap_or_else(|| "—".into()),
+                    column.comment.clone().unwrap_or_default(),
+                ])
+            });
+            frame.render_widget(
+                Table::new(
+                    rows,
+                    [
+                        Constraint::Length(4),
+                        Constraint::Length(22),
+                        Constraint::Length(22),
+                        Constraint::Length(6),
+                        Constraint::Length(10),
+                        Constraint::Percentage(35),
+                        Constraint::Percentage(25),
+                    ],
+                )
+                .header(header)
+                .column_spacing(1),
+                sections[1],
+            );
+        }
+        InspectorSection::Constraints => {
+            let header = Row::new(["Type", "Name", "Definition"]).style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
+            let rows = details.constraints.iter().map(|constraint| {
+                Row::new([
+                    constraint.kind.clone(),
+                    constraint.name.clone(),
+                    constraint.definition.clone(),
+                ])
+            });
+            frame.render_widget(
+                Table::new(
+                    rows,
+                    [
+                        Constraint::Length(16),
+                        Constraint::Length(28),
+                        Constraint::Min(30),
+                    ],
+                )
+                .header(header)
+                .column_spacing(2),
+                sections[1],
+            );
+        }
+        InspectorSection::Indexes => {
+            let header = Row::new(["Index", "PostgreSQL definition"]).style(
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
+            let rows = details
+                .indexes
+                .iter()
+                .map(|index| Row::new([index.name.clone(), index.definition.clone()]));
+            frame.render_widget(
+                Table::new(rows, [Constraint::Length(32), Constraint::Min(40)])
+                    .header(header)
+                    .column_spacing(2),
+                sections[1],
+            );
+        }
+    }
+}
+
+fn metric_line(label: &str, value: String) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<18}"), Style::default().fg(Color::DarkGray)),
+        Span::styled(value, Style::default().fg(Color::LightBlue)),
+    ])
 }
 
 fn draw_completion(frame: &mut Frame, editor_area: Rect, app: &App) {

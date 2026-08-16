@@ -29,6 +29,42 @@ pub struct SchemaCatalog {
     pub functions: Vec<String>,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct TableDetails {
+    pub schema: String,
+    pub name: String,
+    pub columns: Vec<TableColumn>,
+    pub constraints: Vec<TableConstraint>,
+    pub indexes: Vec<TableIndex>,
+    pub estimated_rows: i64,
+    pub table_size: String,
+    pub indexes_size: String,
+    pub total_size: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TableColumn {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub key: Option<String>,
+    pub comment: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TableConstraint {
+    pub name: String,
+    pub kind: String,
+    pub definition: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TableIndex {
+    pub name: String,
+    pub definition: String,
+}
+
 #[derive(Debug)]
 pub enum DatabaseEvent {
     Connected {
@@ -40,11 +76,14 @@ pub enum DatabaseEvent {
     ConnectionFailed(String),
     QueryFinished(QueryResult),
     QueryFailed(String),
+    TableInspected(TableDetails),
+    TableInspectionFailed(String),
 }
 
 enum DatabaseCommand {
     Connect(String),
     Execute(String),
+    InspectTable { schema: String, table: String },
 }
 
 #[derive(Clone)]
@@ -131,6 +170,25 @@ impl DatabaseService {
                             }
                         }
                     }
+                    DatabaseCommand::InspectTable { schema, table } => {
+                        let Some(active_client) = client.as_ref() else {
+                            let _ = events_tx
+                                .send(DatabaseEvent::TableInspectionFailed("not connected".into()))
+                                .await;
+                            continue;
+                        };
+                        match inspect_table(active_client, &schema, &table).await {
+                            Ok(details) => {
+                                let _ =
+                                    events_tx.send(DatabaseEvent::TableInspected(details)).await;
+                            }
+                            Err(error) => {
+                                let _ = events_tx
+                                    .send(DatabaseEvent::TableInspectionFailed(safe_error(&error)))
+                                    .await;
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -153,6 +211,17 @@ impl DatabaseService {
     pub async fn execute(&self, sql: String) -> Result<(), mpsc::error::SendError<()>> {
         self.commands
             .send(DatabaseCommand::Execute(sql))
+            .await
+            .map_err(|_| mpsc::error::SendError(()))
+    }
+
+    pub async fn inspect_table(
+        &self,
+        schema: String,
+        table: String,
+    ) -> Result<(), mpsc::error::SendError<()>> {
+        self.commands
+            .send(DatabaseCommand::InspectTable { schema, table })
             .await
             .map_err(|_| mpsc::error::SendError(()))
     }
@@ -344,4 +413,110 @@ async fn load_catalog(client: &Client) -> DatabaseCatalog {
     DatabaseCatalog {
         schemas: schemas.into_values().collect(),
     }
+}
+
+async fn inspect_table(
+    client: &Client,
+    schema: &str,
+    table: &str,
+) -> Result<TableDetails, tokio_postgres::Error> {
+    let columns_sql = "
+        SELECT
+            a.attname,
+            format_type(a.atttypid, a.atttypmod),
+            NOT a.attnotnull,
+            pg_get_expr(ad.adbin, ad.adrelid),
+            (
+                SELECT string_agg(
+                    CASE c.contype WHEN 'p' THEN 'PRIMARY' WHEN 'u' THEN 'UNIQUE'
+                                    WHEN 'f' THEN 'FOREIGN' ELSE NULL END,
+                    ', '
+                )
+                FROM pg_constraint c
+                WHERE c.conrelid = cls.oid AND a.attnum = ANY(c.conkey)
+                  AND c.contype IN ('p', 'u', 'f')
+            ),
+            col_description(cls.oid, a.attnum)
+        FROM pg_attribute a
+        JOIN pg_class cls ON cls.oid = a.attrelid
+        JOIN pg_namespace n ON n.oid = cls.relnamespace
+        LEFT JOIN pg_attrdef ad ON ad.adrelid = a.attrelid AND ad.adnum = a.attnum
+        WHERE n.nspname = $1 AND cls.relname = $2
+          AND a.attnum > 0 AND NOT a.attisdropped
+        ORDER BY a.attnum
+    ";
+    let columns = client
+        .query(columns_sql, &[&schema, &table])
+        .await?
+        .into_iter()
+        .map(|row| TableColumn {
+            name: row.get(0),
+            data_type: row.get(1),
+            nullable: row.get(2),
+            default: row.get(3),
+            key: row.get(4),
+            comment: row.get(5),
+        })
+        .collect();
+
+    let constraints_sql = "
+        SELECT con.conname,
+               CASE con.contype WHEN 'p' THEN 'PRIMARY KEY' WHEN 'f' THEN 'FOREIGN KEY'
+                    WHEN 'u' THEN 'UNIQUE' WHEN 'c' THEN 'CHECK' WHEN 'x' THEN 'EXCLUSION'
+                    ELSE con.contype::text END,
+               pg_get_constraintdef(con.oid, true)
+        FROM pg_constraint con
+        JOIN pg_class cls ON cls.oid = con.conrelid
+        JOIN pg_namespace n ON n.oid = cls.relnamespace
+        WHERE n.nspname = $1 AND cls.relname = $2
+        ORDER BY con.contype, con.conname
+    ";
+    let constraints = client
+        .query(constraints_sql, &[&schema, &table])
+        .await?
+        .into_iter()
+        .map(|row| TableConstraint {
+            name: row.get(0),
+            kind: row.get(1),
+            definition: row.get(2),
+        })
+        .collect();
+
+    let indexes = client
+        .query(
+            "SELECT indexname, indexdef FROM pg_indexes
+             WHERE schemaname = $1 AND tablename = $2 ORDER BY indexname",
+            &[&schema, &table],
+        )
+        .await?
+        .into_iter()
+        .map(|row| TableIndex {
+            name: row.get(0),
+            definition: row.get(1),
+        })
+        .collect();
+
+    let stats = client
+        .query_one(
+            "SELECT cls.reltuples::bigint,
+                    pg_size_pretty(pg_relation_size(cls.oid)),
+                    pg_size_pretty(pg_indexes_size(cls.oid)),
+                    pg_size_pretty(pg_total_relation_size(cls.oid))
+             FROM pg_class cls JOIN pg_namespace n ON n.oid = cls.relnamespace
+             WHERE n.nspname = $1 AND cls.relname = $2",
+            &[&schema, &table],
+        )
+        .await?;
+
+    Ok(TableDetails {
+        schema: schema.into(),
+        name: table.into(),
+        columns,
+        constraints,
+        indexes,
+        estimated_rows: stats.get(0),
+        table_size: stats.get(1),
+        indexes_size: stats.get(2),
+        total_size: stats.get(3),
+    })
 }

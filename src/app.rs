@@ -2,7 +2,7 @@ use std::{collections::HashSet, time::Duration};
 
 use crate::{
     action::Action,
-    database::{DatabaseCatalog, DatabaseEvent, DatabaseService, QueryResult},
+    database::{DatabaseCatalog, DatabaseEvent, DatabaseService, QueryResult, TableDetails},
     sql::completion,
 };
 
@@ -33,6 +33,34 @@ pub enum Focus {
     Explorer,
     Editor,
     Results,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InspectorSection {
+    Overview,
+    Columns,
+    Constraints,
+    Indexes,
+}
+
+impl InspectorSection {
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Overview => Self::Columns,
+            Self::Columns => Self::Constraints,
+            Self::Constraints => Self::Indexes,
+            Self::Indexes => Self::Overview,
+        }
+    }
+
+    pub const fn previous(self) -> Self {
+        match self {
+            Self::Overview => Self::Indexes,
+            Self::Columns => Self::Overview,
+            Self::Constraints => Self::Columns,
+            Self::Indexes => Self::Constraints,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +94,9 @@ pub struct App {
     pub completion_items: Vec<String>,
     pub relation_items: Vec<String>,
     pub completion_index: usize,
+    pub inspector: Option<TableDetails>,
+    pub inspector_loading: bool,
+    pub inspector_section: InspectorSection,
     database: DatabaseService,
 }
 
@@ -93,6 +124,9 @@ impl App {
             completion_items: Vec::new(),
             relation_items: Vec::new(),
             completion_index: 0,
+            inspector: None,
+            inspector_loading: false,
+            inspector_section: InspectorSection::Columns,
             database,
         }
     }
@@ -140,14 +174,26 @@ impl App {
                 });
             }
             Action::Activate if self.focus == Focus::Explorer => {
-                if let Some(entry) = self.explorer_entries().get(self.explorer_selection)
-                    && entry.expandable
+                if let Some(entry) = self
+                    .explorer_entries()
+                    .get(self.explorer_selection)
+                    .cloned()
                 {
-                    let id = entry.id.clone();
-                    if !self.explorer_open.remove(&id) {
-                        self.explorer_open.insert(id);
+                    if entry.expandable {
+                        if !self.explorer_open.remove(&entry.id) {
+                            self.explorer_open.insert(entry.id);
+                        }
+                        self.explorer_expanded = self.explorer_open.contains("database");
+                    } else if let Some((schema, table)) = table_from_entry_id(&entry.id) {
+                        self.inspector_loading = true;
+                        self.inspector = None;
+                        self.inspector_section = InspectorSection::Columns;
+                        self.focus = Focus::Results;
+                        if self.database.inspect_table(schema, table).await.is_err() {
+                            self.inspector_loading = false;
+                            self.error = Some("database worker is unavailable".into());
+                        }
                     }
-                    self.explorer_expanded = self.explorer_open.contains("database");
                 }
             }
             Action::Activate => {}
@@ -217,6 +263,36 @@ impl App {
                         .drain(self.cursor..self.cursor + character.len_utf8());
                 }
             }
+            Action::PreviousInspectorSection => {
+                self.inspector_section = self.inspector_section.previous();
+            }
+            Action::NextInspectorSection => {
+                self.inspector_section = self.inspector_section.next();
+            }
+            Action::CloseInspector => {
+                if self.inspector.is_some() || self.inspector_loading {
+                    self.inspector = None;
+                    self.inspector_loading = false;
+                    self.focus = Focus::Explorer;
+                }
+            }
+            Action::PreviewInspectedTable => {
+                if let Some(details) = &self.inspector {
+                    let schema = details.schema.replace('"', "\"\"");
+                    let table = details.name.replace('"', "\"\"");
+                    self.query = format!("SELECT *\nFROM \"{schema}\".\"{table}\"\nLIMIT 100;");
+                    self.cursor = self.query.len();
+                    self.inspector = None;
+                    self.result = None;
+                    self.error = None;
+                    self.query_running = true;
+                    self.focus = Focus::Results;
+                    if self.database.execute(self.query.clone()).await.is_err() {
+                        self.query_running = false;
+                        self.error = Some("database worker is unavailable".into());
+                    }
+                }
+            }
             Action::ToggleHelp => self.help_visible = !self.help_visible,
             Action::FocusNext => {
                 self.focus = match self.focus {
@@ -242,10 +318,24 @@ impl App {
                 self.focus = Focus::Explorer;
                 self.explorer_selection =
                     index.min(self.explorer_entries().len().saturating_sub(1));
-                if let Some(entry) = self.explorer_entries().get(self.explorer_selection) {
-                    let id = entry.id.clone();
-                    if entry.expandable && !self.explorer_open.remove(&id) {
-                        self.explorer_open.insert(id);
+                if let Some(entry) = self
+                    .explorer_entries()
+                    .get(self.explorer_selection)
+                    .cloned()
+                {
+                    if entry.expandable {
+                        if !self.explorer_open.remove(&entry.id) {
+                            self.explorer_open.insert(entry.id);
+                        }
+                    } else if let Some((schema, table)) = table_from_entry_id(&entry.id) {
+                        self.inspector_loading = true;
+                        self.inspector = None;
+                        self.inspector_section = InspectorSection::Columns;
+                        self.focus = Focus::Results;
+                        if self.database.inspect_table(schema, table).await.is_err() {
+                            self.inspector_loading = false;
+                            self.error = Some("database worker is unavailable".into());
+                        }
                     }
                 }
             }
@@ -307,14 +397,18 @@ impl App {
             }
             Action::Backspace => self.backspace(),
             Action::MoveLeft => {
-                if self.focus == Focus::Results {
+                if self.focus == Focus::Results && self.inspector.is_some() {
+                    self.inspector_section = self.inspector_section.previous();
+                } else if self.focus == Focus::Results {
                     self.result_column = self.result_column.saturating_sub(1);
                 } else {
                     self.move_left();
                 }
             }
             Action::MoveRight => {
-                if self.focus == Focus::Results {
+                if self.focus == Focus::Results && self.inspector.is_some() {
+                    self.inspector_section = self.inspector_section.next();
+                } else if self.focus == Focus::Results {
                     let columns = self
                         .result
                         .as_ref()
@@ -388,6 +482,15 @@ impl App {
             }
             DatabaseEvent::QueryFailed(message) => {
                 self.query_running = false;
+                self.error = Some(message);
+            }
+            DatabaseEvent::TableInspected(details) => {
+                self.inspector_loading = false;
+                self.inspector = Some(details);
+                self.error = None;
+            }
+            DatabaseEvent::TableInspectionFailed(message) => {
+                self.inspector_loading = false;
                 self.error = Some(message);
             }
         }
@@ -606,6 +709,15 @@ fn add_category(
     }
 }
 
+fn table_from_entry_id(id: &str) -> Option<(String, String)> {
+    let rest = id.strip_prefix("schema:")?;
+    let mut parts = rest.splitn(3, ':');
+    let schema = parts.next()?;
+    let category = parts.next()?;
+    let table = parts.next()?;
+    (category == "Tables").then(|| (schema.into(), table.into()))
+}
+
 fn byte_at_column(line: &str, offset: usize, column: usize) -> usize {
     offset
         + line
@@ -679,5 +791,26 @@ mod tests {
 
         assert_eq!(app.cursor, 9);
         assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn table_entries_resolve_to_qualified_names() {
+        assert_eq!(
+            table_from_entry_id("schema:public:Tables:collections"),
+            Some(("public".into(), "collections".into()))
+        );
+        assert_eq!(
+            table_from_entry_id("schema:public:Views:active_users"),
+            None
+        );
+    }
+
+    #[test]
+    fn inspector_sections_cycle_in_both_directions() {
+        assert_eq!(InspectorSection::Indexes.next(), InspectorSection::Overview);
+        assert_eq!(
+            InspectorSection::Overview.previous(),
+            InspectorSection::Indexes
+        );
     }
 }

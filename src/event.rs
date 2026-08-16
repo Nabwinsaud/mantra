@@ -113,6 +113,10 @@ pub fn map_key_event(
         KeyCode::Char('b') => Some(Action::MoveWordBackward),
         KeyCode::Char('e') => Some(Action::MoveWordEnd),
         KeyCode::Char('G') => Some(Action::GoToLastLine),
+        KeyCode::Char('[') => Some(Action::PreviousInspectorSection),
+        KeyCode::Char(']') => Some(Action::NextInspectorSection),
+        KeyCode::Char('p') => Some(Action::PreviewInspectedTable),
+        KeyCode::Esc => Some(Action::CloseInspector),
         KeyCode::Char('g') => {
             *sequence = Some('g');
             None

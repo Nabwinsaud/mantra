@@ -56,7 +56,7 @@ async fn main() -> Result<()> {
                         if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) =>
                     {
                         let (width, height) = crossterm::terminal::size()?;
-                        let action = ui::mouse_action(mouse.column, mouse.row, width, height);
+                        let action = ui::mouse_action(mouse.column, mouse.row, width, height, &app);
                         app.update(action).await;
                     }
                     Some(Err(error)) => return Err(error.into()),

@@ -48,6 +48,17 @@ connected database, ranked with Nucleo's fuzzy matcher.
 The Results panel supports selected-cell navigation with `h/j/k/l`, horizontal column paging,
 vertical row scrolling, row numbers, NULL styling, and native rendering for UUID, date/time,
 JSON/JSONB, boolean, numeric, text, enum, and bytea values.
+
+## Table inspector
+
+Focus the Explorer, select a table, and press `Enter` (or click the table) to lazily load its
+PostgreSQL metadata. The inspector shows columns, native types, nullability, defaults, comments,
+keys, constraints, index definitions, estimated rows, and storage sizes without loading every
+table at startup.
+
+- `h/l` or `[/]`: switch inspector sections
+- `p`: preview the first 100 rows with a safely quoted generated query
+- `Esc`: close the inspector and return to the Explorer
 - `Ctrl-C` or `q` in normal mode: quit
 - Arrow keys: move the editor cursor
 - Backspace/Enter: edit while in insert mode
