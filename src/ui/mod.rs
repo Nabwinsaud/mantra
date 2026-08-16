@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::{
     action::Action,
-    app::{App, ConnectionState, Focus, InspectorSection, Mode},
+    app::{App, ConnectionState, FinderItem, FinderKind, Focus, InspectorSection, Mode},
 };
 
 pub fn mouse_action(column: u16, row: u16, width: u16, height: u16, app: &App) -> Action {
@@ -67,6 +67,12 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_results(frame, content[1], app);
     draw_status(frame, outer[2], app);
     draw_completion(frame, top[1], app);
+    if app.finder.is_some() {
+        draw_finder(frame, app);
+    }
+    if app.save_dialog.is_some() {
+        draw_save_dialog(frame, app);
+    }
     if app.help_visible {
         draw_help(frame);
     }
@@ -128,14 +134,17 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(crate::sql::highlight::lines(&app.query)).block(panel_block(
             &format!(
-                "SQL  {}  Ln {cursor_line}, Col {cursor_column}",
-                app.mode.label()
+                "SQL  {}  Ln {cursor_line}, Col {cursor_column}{}",
+                app.mode.label(),
+                app.saved_query_name
+                    .as_deref()
+                    .map_or_else(|| "  ·  Unsaved".into(), |name| format!("  ·  {name}"))
             ),
             app.focus == Focus::Editor,
         )),
         area,
     );
-    if app.focus == Focus::Editor && !app.help_visible {
+    if app.focus == Focus::Editor && !app.help_visible && !app.overlay_active() {
         let prefix = &app.query[..app.cursor];
         let row = prefix
             .chars()
@@ -550,7 +559,9 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         })
         .unwrap_or_default();
     let hint = if app.key_sequence == Some(' ') {
-        "LEADER  r Run  ? Help"
+        "LEADER  r Run  f Find  ? Help"
+    } else if app.key_sequence == Some('f') {
+        "LEADER f…  f Saved queries  •  h History  •  Esc Cancel"
     } else if app.key_sequence == Some('d') {
         "d…  d Delete current line  •  Esc Cancel"
     } else if app.key_sequence == Some('g') {
@@ -558,15 +569,202 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     } else if app.mode == Mode::Insert {
         "Esc Normal  •  type to edit"
     } else {
-        "1 Explorer  2 SQL  3 Results  •  Ctrl-Enter/Space r Run  •  i/o/dd Edit  •  ? Help"
+        "1 Explorer  2 SQL  3 Results  •  Ctrl-s Save  •  Space ff/fh Find  •  ? Help"
     };
-    let left = format!(" {} │ {}{}", app.mode.label(), connection, details);
+    let message = app
+        .status_message
+        .as_deref()
+        .map_or_else(String::new, |message| format!(" │ {message}"));
+    let left = format!(
+        " {} │ {}{}{}",
+        app.mode.label(),
+        connection,
+        details,
+        message
+    );
     let gap = (area.width as usize).saturating_sub(left.chars().count() + hint.chars().count() + 1);
     frame.render_widget(
         Paragraph::new(format!("{left}{}{hint} ", " ".repeat(gap)))
             .style(Style::default().fg(Color::Black).bg(Color::Cyan)),
         area,
     );
+}
+
+fn draw_save_dialog(frame: &mut Frame, app: &App) {
+    let Some(dialog) = &app.save_dialog else {
+        return;
+    };
+    let area = centered_fixed(68, 8, frame.area());
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(" Save query ")
+        .title_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .padding(Padding::uniform(1));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let rows = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::Cyan)),
+            Span::raw(&dialog.input),
+        ])),
+        rows[0],
+    );
+    frame.render_widget(
+        Paragraph::new("Stored for this database and mirrored to .pgide/queries/")
+            .style(Style::default().fg(Color::DarkGray)),
+        rows[1],
+    );
+    frame.render_widget(
+        Paragraph::new("Enter save  •  Esc cancel").style(Style::default().fg(Color::LightBlue)),
+        rows[2],
+    );
+    frame.set_cursor_position((
+        rows[0]
+            .x
+            .saturating_add(2 + dialog.input.chars().count() as u16),
+        rows[0].y,
+    ));
+}
+
+fn draw_finder(frame: &mut Frame, app: &App) {
+    let Some(finder) = &app.finder else {
+        return;
+    };
+    let matches = app.finder_matches();
+    let title = match finder.kind {
+        FinderKind::SavedQueries => " Saved queries · <leader>ff ",
+        FinderKind::History => " Query history · <leader>fh ",
+    };
+    let area = centered_rect(82, 76, frame.area());
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .padding(Padding::uniform(1));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let sections = Layout::vertical([
+        Constraint::Length(2),
+        Constraint::Percentage(42),
+        Constraint::Min(4),
+        Constraint::Length(1),
+    ])
+    .split(inner);
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("Find  ", Style::default().fg(Color::Cyan)),
+            Span::raw(&finder.input),
+        ]))
+        .block(Block::default().borders(Borders::BOTTOM)),
+        sections[0],
+    );
+
+    let visible_rows = sections[1].height.max(1) as usize;
+    let start = finder
+        .selected
+        .saturating_sub(visible_rows.saturating_sub(1));
+    let lines = matches
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(visible_rows)
+        .map(|(match_index, item_index)| {
+            let item = &finder.items[*item_index];
+            Line::styled(
+                format!(" {}", item.label()),
+                if match_index == finder.selected {
+                    Style::default()
+                        .fg(Color::Black)
+                        .bg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(if lines.is_empty() {
+            vec![Line::styled(
+                " No matching queries",
+                Style::default().fg(Color::DarkGray),
+            )]
+        } else {
+            lines
+        })
+        .block(Block::default().title(format!(" {} matches ", matches.len()))),
+        sections[1],
+    );
+
+    let selected_item = matches
+        .get(finder.selected)
+        .and_then(|index| finder.items.get(*index));
+    let preview_title = selected_item.map_or_else(
+        || " SQL preview ".into(),
+        |item| match item {
+            FinderItem::Saved(saved) => format!(
+                " SQL preview · {} · {} ",
+                saved.database_name,
+                std::path::Path::new(&saved.file_path)
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("query.sql")
+            ),
+            FinderItem::History(entry) => {
+                let status = if entry.success { "success" } else { "failed" };
+                format!(" SQL preview · {status} ")
+            }
+        },
+    );
+    let preview = selected_item.map_or_else(Vec::new, |item| {
+        let mut lines = crate::sql::highlight::lines(item.sql());
+        if let FinderItem::History(entry) = item
+            && let Some(error) = &entry.error
+        {
+            lines.push(Line::from(""));
+            lines.push(Line::styled(
+                format!("PostgreSQL: {error}"),
+                Style::default().fg(Color::Red),
+            ));
+        }
+        lines
+    });
+    frame.render_widget(
+        Paragraph::new(preview)
+            .wrap(Wrap { trim: false })
+            .block(Block::default().title(preview_title).borders(Borders::TOP)),
+        sections[2],
+    );
+    frame.render_widget(
+        Paragraph::new("Type to filter  •  Ctrl-n/p or ↑/↓ select  •  Enter open  •  Esc close")
+            .style(Style::default().fg(Color::LightBlue)),
+        sections[3],
+    );
+    frame.set_cursor_position((
+        sections[0]
+            .x
+            .saturating_add(6 + finder.input.chars().count() as u16),
+        sections[0].y,
+    ));
 }
 
 fn draw_help(frame: &mut Frame) {
@@ -584,6 +782,9 @@ fn draw_help(frame: &mut Frame) {
         key_line("i", "Enter INSERT mode and edit SQL"),
         key_line("Esc", "Return to NORMAL mode / close this window"),
         key_line("Ctrl-Enter / Space r", "Run statement under cursor"),
+        key_line("Ctrl-s", "Save or update the current query"),
+        key_line("Space f f", "Find saved queries for this database"),
+        key_line("Space f h", "Search query history"),
         key_line("? / F1", "Open or close this cheat sheet"),
         key_line("q", "Quit from NORMAL mode"),
         key_line("Ctrl-c", "Quit from anywhere"),
@@ -700,4 +901,15 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         Constraint::Percentage((100 - percent_x) / 2),
     ])
     .split(vertical[1])[1]
+}
+
+fn centered_fixed(width: u16, height: u16, area: Rect) -> Rect {
+    let width = width.min(area.width);
+    let height = height.min(area.height);
+    Rect::new(
+        area.x + area.width.saturating_sub(width) / 2,
+        area.y + area.height.saturating_sub(height) / 2,
+        width,
+        height,
+    )
 }

@@ -3,6 +3,7 @@ mod app;
 mod database;
 mod event;
 mod sql;
+mod storage;
 mod terminal;
 mod ui;
 
@@ -20,7 +21,9 @@ async fn main() -> Result<()> {
     let connection_url = env::args().nth(1);
     let mut terminal = terminal::TerminalGuard::new(io::stdout())?;
     let (database, mut database_events) = database::DatabaseService::spawn();
-    let mut app = App::new(database);
+    let project_root = env::current_dir()?;
+    let storage = storage::Storage::open(&project_root)?;
+    let mut app = App::with_storage(database, storage);
     let mut rendered_mode = None;
 
     if let Some(url) = connection_url {
@@ -39,11 +42,13 @@ async fn main() -> Result<()> {
             maybe_event = input.next() => {
                 match maybe_event {
                     Some(Ok(CrosstermEvent::Key(key))) => {
+                        let overlay_active = app.overlay_active();
                         if let Some(action) = map_key_event(
                             key,
                             &mut app.key_sequence,
                             app.mode,
                             app.help_visible,
+                            overlay_active,
                         ) {
                             app.update(action).await;
                         }

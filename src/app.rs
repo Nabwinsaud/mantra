@@ -4,6 +4,11 @@ use crate::{
     action::Action,
     database::{DatabaseCatalog, DatabaseEvent, DatabaseService, QueryResult, TableDetails},
     sql::completion,
+    storage::{HistoryEntry, SavedQuery, Storage},
+};
+use nucleo_matcher::{
+    Config, Matcher,
+    pattern::{AtomKind, CaseMatching, Normalization, Pattern},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -72,6 +77,55 @@ pub struct ExplorerEntry {
     pub open: bool,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FinderKind {
+    SavedQueries,
+    History,
+}
+
+#[derive(Debug, Clone)]
+pub enum FinderItem {
+    Saved(SavedQuery),
+    History(HistoryEntry),
+}
+
+impl FinderItem {
+    pub fn sql(&self) -> &str {
+        match self {
+            Self::Saved(query) => &query.sql,
+            Self::History(entry) => &entry.sql,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self {
+            Self::Saved(query) => query.name.clone(),
+            Self::History(entry) => {
+                let status = if entry.success { "✓" } else { "✗" };
+                let summary = entry.sql.lines().next().unwrap_or_default();
+                let duration = entry
+                    .duration_ms
+                    .map_or_else(|| "—".into(), |milliseconds| format!("{milliseconds}ms"));
+                format!(
+                    "{status} {}  {duration:>7}  #{:<4} {summary}",
+                    entry.executed_at, entry.id
+                )
+            }
+        }
+    }
+}
+
+pub struct FinderState {
+    pub kind: FinderKind,
+    pub input: String,
+    pub selected: usize,
+    pub items: Vec<FinderItem>,
+}
+
+pub struct SaveDialogState {
+    pub input: String,
+}
+
 pub struct App {
     pub mode: Mode,
     pub connection: ConnectionState,
@@ -97,11 +151,26 @@ pub struct App {
     pub inspector: Option<TableDetails>,
     pub inspector_loading: bool,
     pub inspector_section: InspectorSection,
+    pub finder: Option<FinderState>,
+    pub save_dialog: Option<SaveDialogState>,
+    pub saved_query_id: Option<i64>,
+    pub saved_query_name: Option<String>,
+    pub status_message: Option<String>,
+    running_statement: Option<String>,
     database: DatabaseService,
+    storage: Storage,
 }
 
 impl App {
+    #[cfg(test)]
     pub fn new(database: DatabaseService) -> Self {
+        Self::with_storage(
+            database,
+            Storage::memory().expect("create in-memory storage"),
+        )
+    }
+
+    pub fn with_storage(database: DatabaseService, storage: Storage) -> Self {
         Self {
             mode: Mode::Normal,
             connection: ConnectionState::Disconnected,
@@ -127,7 +196,14 @@ impl App {
             inspector: None,
             inspector_loading: false,
             inspector_section: InspectorSection::Columns,
+            finder: None,
+            save_dialog: None,
+            saved_query_id: None,
+            saved_query_name: None,
+            status_message: None,
+            running_statement: None,
             database,
+            storage,
         }
     }
 
@@ -163,6 +239,9 @@ impl App {
                 } else if self.database.execute(statement).await.is_err() {
                     self.query_running = false;
                     self.error = Some("database worker is unavailable".into());
+                } else {
+                    self.running_statement =
+                        Some(crate::sql::statement::current(&self.query, self.cursor).to_owned());
                 }
                 self.focus = Focus::Results;
             }
@@ -285,13 +364,29 @@ impl App {
                     self.inspector = None;
                     self.result = None;
                     self.error = None;
+                    self.saved_query_id = None;
+                    self.saved_query_name = None;
                     self.query_running = true;
                     self.focus = Focus::Results;
                     if self.database.execute(self.query.clone()).await.is_err() {
                         self.query_running = false;
                         self.error = Some("database worker is unavailable".into());
+                    } else {
+                        self.running_statement = Some(self.query.clone());
                     }
                 }
+            }
+            Action::SaveQuery => self.save_query(),
+            Action::OpenSavedQueryFinder => self.open_finder(FinderKind::SavedQueries),
+            Action::OpenHistoryFinder => self.open_finder(FinderKind::History),
+            Action::OverlayInsert(character) => self.overlay_insert(character),
+            Action::OverlayBackspace => self.overlay_backspace(),
+            Action::OverlayNext => self.overlay_move(1),
+            Action::OverlayPrevious => self.overlay_move(-1),
+            Action::OverlayAccept => self.overlay_accept(),
+            Action::OverlayCancel => {
+                self.finder = None;
+                self.save_dialog = None;
             }
             Action::ToggleHelp => self.help_visible = !self.help_visible,
             Action::FocusNext => {
@@ -460,6 +555,8 @@ impl App {
             } => {
                 self.connection = ConnectionState::Connected;
                 self.database_name = Some(database_name);
+                self.saved_query_id = None;
+                self.saved_query_name = None;
                 self.completion_items = completion_items;
                 self.relation_items = relation_items;
                 self.catalog = catalog;
@@ -475,6 +572,17 @@ impl App {
             }
             DatabaseEvent::QueryFinished(result) => {
                 self.query_running = false;
+                if let Some(statement) = self.running_statement.take()
+                    && let Some(database_name) = self.database_name.as_deref()
+                {
+                    let _ = self.storage.record_history(
+                        database_name,
+                        &statement,
+                        true,
+                        Some(result.elapsed.as_millis() as i64),
+                        None,
+                    );
+                }
                 self.result = Some(result);
                 self.result_row = 0;
                 self.result_column = 0;
@@ -482,6 +590,17 @@ impl App {
             }
             DatabaseEvent::QueryFailed(message) => {
                 self.query_running = false;
+                if let Some(statement) = self.running_statement.take()
+                    && let Some(database_name) = self.database_name.as_deref()
+                {
+                    let _ = self.storage.record_history(
+                        database_name,
+                        &statement,
+                        false,
+                        None,
+                        Some(&message),
+                    );
+                }
                 self.error = Some(message);
             }
             DatabaseEvent::TableInspected(details) => {
@@ -498,6 +617,186 @@ impl App {
 
     pub fn elapsed(&self) -> Option<Duration> {
         self.result.as_ref().map(|result| result.elapsed)
+    }
+
+    pub fn overlay_active(&self) -> bool {
+        self.finder.is_some() || self.save_dialog.is_some()
+    }
+
+    pub fn finder_matches(&self) -> Vec<usize> {
+        struct Candidate {
+            index: usize,
+            label: String,
+        }
+
+        impl AsRef<str> for Candidate {
+            fn as_ref(&self) -> &str {
+                &self.label
+            }
+        }
+
+        let Some(finder) = &self.finder else {
+            return Vec::new();
+        };
+        if finder.input.trim().is_empty() {
+            return (0..finder.items.len()).collect();
+        }
+        let candidates = finder
+            .items
+            .iter()
+            .enumerate()
+            .map(|(index, item)| Candidate {
+                index,
+                label: item.label(),
+            })
+            .collect::<Vec<_>>();
+        let mut matcher = Matcher::new(Config::DEFAULT);
+        Pattern::new(
+            &finder.input,
+            CaseMatching::Ignore,
+            Normalization::Smart,
+            AtomKind::Fuzzy,
+        )
+        .match_list(candidates, &mut matcher)
+        .into_iter()
+        .map(|(candidate, _)| candidate.index)
+        .collect()
+    }
+
+    fn save_query(&mut self) {
+        if self.database_name.is_none() {
+            self.status_message = Some("Connect to a database before saving a query".into());
+            return;
+        }
+        if self.saved_query_id.is_none() {
+            self.save_dialog = Some(SaveDialogState {
+                input: self.saved_query_name.clone().unwrap_or_default(),
+            });
+            return;
+        }
+        self.persist_saved_query();
+    }
+
+    fn persist_saved_query(&mut self) {
+        let Some(database_name) = self.database_name.as_deref() else {
+            self.status_message = Some("Connect to a database before saving a query".into());
+            return;
+        };
+        let Some(name) = self.saved_query_name.as_deref() else {
+            return;
+        };
+        match self
+            .storage
+            .save_query(self.saved_query_id, database_name, name, &self.query)
+        {
+            Ok(saved) => {
+                self.saved_query_id = Some(saved.id);
+                self.saved_query_name = Some(saved.name.clone());
+                self.status_message = Some(format!("Saved '{}'", saved.name));
+            }
+            Err(error) => self.status_message = Some(format!("Save failed: {error}")),
+        }
+    }
+
+    fn open_finder(&mut self, kind: FinderKind) {
+        let Some(database_name) = self.database_name.as_deref() else {
+            self.status_message = Some("Connect to a database first".into());
+            return;
+        };
+        let loaded = match kind {
+            FinderKind::SavedQueries => self
+                .storage
+                .saved_queries(database_name)
+                .map(|items| items.into_iter().map(FinderItem::Saved).collect()),
+            FinderKind::History => self
+                .storage
+                .history(database_name, 1_000)
+                .map(|items| items.into_iter().map(FinderItem::History).collect()),
+        };
+        match loaded {
+            Ok(items) => {
+                self.finder = Some(FinderState {
+                    kind,
+                    input: String::new(),
+                    selected: 0,
+                    items,
+                });
+            }
+            Err(error) => self.status_message = Some(format!("Could not open finder: {error}")),
+        }
+    }
+
+    fn overlay_insert(&mut self, character: char) {
+        if let Some(dialog) = &mut self.save_dialog {
+            dialog.input.push(character);
+        } else if let Some(finder) = &mut self.finder {
+            finder.input.push(character);
+            finder.selected = 0;
+        }
+    }
+
+    fn overlay_backspace(&mut self) {
+        if let Some(dialog) = &mut self.save_dialog {
+            dialog.input.pop();
+        } else if let Some(finder) = &mut self.finder {
+            finder.input.pop();
+            finder.selected = 0;
+        }
+    }
+
+    fn overlay_move(&mut self, direction: i32) {
+        let count = self.finder_matches().len();
+        let Some(finder) = &mut self.finder else {
+            return;
+        };
+        if count == 0 {
+            finder.selected = 0;
+        } else if direction > 0 {
+            finder.selected = (finder.selected + 1) % count;
+        } else {
+            finder.selected = finder.selected.checked_sub(1).unwrap_or(count - 1);
+        }
+    }
+
+    fn overlay_accept(&mut self) {
+        if let Some(dialog) = self.save_dialog.take() {
+            let name = dialog.input.trim().to_owned();
+            if name.is_empty() {
+                self.status_message = Some("Query name cannot be empty".into());
+                self.save_dialog = Some(dialog);
+                return;
+            }
+            self.saved_query_name = Some(name);
+            self.persist_saved_query();
+            return;
+        }
+        let matches = self.finder_matches();
+        let Some(finder) = self.finder.take() else {
+            return;
+        };
+        let Some(index) = matches.get(finder.selected).copied() else {
+            return;
+        };
+        let item = &finder.items[index];
+        self.query = item.sql().into();
+        self.cursor = self.query.len();
+        self.focus = Focus::Editor;
+        self.mode = Mode::Normal;
+        self.inspector = None;
+        self.inspector_loading = false;
+        self.error = None;
+        match item {
+            FinderItem::Saved(saved) => {
+                self.saved_query_id = Some(saved.id);
+                self.saved_query_name = Some(saved.name.clone());
+                self.status_message = Some(format!("Opened '{}'", saved.name));
+            }
+            FinderItem::History(_) => {
+                self.saved_query_id = None;
+                self.saved_query_name = None;
+                self.status_message = Some("Opened query from history".into());
+            }
+        }
     }
 
     pub fn explorer_entries(&self) -> Vec<ExplorerEntry> {
@@ -791,6 +1090,76 @@ mod tests {
 
         assert_eq!(app.cursor, 9);
         assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[tokio::test]
+    async fn first_save_names_query_and_later_saves_update_it() {
+        let mut app = app();
+        app.connection = ConnectionState::Connected;
+        app.database_name = Some("project_db".into());
+        app.query = "SELECT 1;".into();
+        app.cursor = app.query.len();
+
+        app.update(Action::SaveQuery).await;
+        assert!(app.save_dialog.is_some());
+        for character in "Health check".chars() {
+            app.update(Action::OverlayInsert(character)).await;
+        }
+        app.update(Action::OverlayAccept).await;
+
+        let saved_id = app.saved_query_id.expect("saved query id");
+        assert_eq!(app.saved_query_name.as_deref(), Some("Health check"));
+        app.query = "SELECT 2;".into();
+        app.update(Action::SaveQuery).await;
+
+        let saved = app.storage.saved_queries("project_db").unwrap();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].id, saved_id);
+        assert_eq!(saved[0].sql, "SELECT 2;");
+    }
+
+    #[tokio::test]
+    async fn saved_query_finder_filters_and_opens_selected_sql() {
+        let mut app = app();
+        app.connection = ConnectionState::Connected;
+        app.database_name = Some("project_db".into());
+        app.storage
+            .save_query(None, "project_db", "Daily revenue", "SELECT 42;")
+            .unwrap();
+        app.storage
+            .save_query(None, "project_db", "Failed jobs", "SELECT 0;")
+            .unwrap();
+
+        app.update(Action::OpenSavedQueryFinder).await;
+        for character in "revenue".chars() {
+            app.update(Action::OverlayInsert(character)).await;
+        }
+        assert_eq!(app.finder_matches().len(), 1);
+        app.update(Action::OverlayAccept).await;
+
+        assert_eq!(app.query, "SELECT 42;");
+        assert_eq!(app.saved_query_name.as_deref(), Some("Daily revenue"));
+        assert!(app.finder.is_none());
+    }
+
+    #[tokio::test]
+    async fn completed_queries_are_added_to_database_history() {
+        let mut app = app();
+        app.database_name = Some("project_db".into());
+        app.query_running = true;
+        app.running_statement = Some("SELECT now();".into());
+
+        app.handle_database_event(DatabaseEvent::QueryFinished(QueryResult {
+            columns: vec!["now".into()],
+            rows: vec![vec!["2026-08-16".into()]],
+            elapsed: Duration::from_millis(12),
+        }));
+
+        let history = app.storage.history("project_db", 10).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].sql, "SELECT now();");
+        assert_eq!(history[0].duration_ms, Some(12));
+        assert!(history[0].success);
     }
 
     #[test]

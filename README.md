@@ -27,6 +27,9 @@ The connection URL is used only in memory and is never displayed or logged.
 - `Ctrl-n` / `Ctrl-p`: select the next / previous completion
 - `Enter` in INSERT mode: accept completion, or insert a newline when none is shown
 - `Ctrl-Enter` or `<leader>r`: run the statement under the cursor and focus Results
+- `Ctrl-s`: save the current query; the first save asks for a name
+- `<leader>ff`: fuzzy-find saved queries for the current project and database
+- `<leader>fh`: fuzzy-find automatically recorded query history
 - `o`: open a new line below and enter INSERT mode
 - `dd`: delete the current line
 - `a` / `A`: append after cursor / at line end
@@ -46,6 +49,21 @@ keywords with schemas, tables, columns, `schema.table`, and `table.column` names
 connected database, ranked with Nucleo's fuzzy matcher. SQL aliases are scoped to their source
 table, so `FROM user_roles ur ... ur.` completes as `ur."userId"`, not an unrelated table's
 column. Mixed-case PostgreSQL identifiers are quoted automatically to prevent case folding.
+
+## Saved queries and history
+
+Press `Ctrl-s` to name and save the current SQL buffer. Later `Ctrl-s` updates the same saved
+query. Saved queries are scoped to both the directory where PGIDE was started and the connected
+database. A portable SQL copy is written to `.pgide/queries/`, while searchable metadata and query
+history are stored in PGIDE's platform-local SQLite database.
+
+- `<leader>ff` (Space, `f`, `f`): open saved queries
+- `<leader>fh` (Space, `f`, `h`): open query history
+- Type to fuzzy-filter, use `Ctrl-n` / `Ctrl-p` or arrow keys to select, then press `Enter`
+- Press `Esc` to close either finder
+
+Every query sent to PostgreSQL is recorded with its success state, execution time, database, and
+timestamp. Connection strings and credentials are never stored in query history.
 
 The Results panel supports selected-cell navigation with `h/j/k/l`, horizontal column paging,
 vertical row scrolling, row numbers, NULL styling, and native rendering for UUID, date/time,

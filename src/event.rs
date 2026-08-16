@@ -7,6 +7,7 @@ pub fn map_key_event(
     sequence: &mut Option<char>,
     mode: Mode,
     help_visible: bool,
+    overlay_active: bool,
 ) -> Option<Action> {
     if key.kind != KeyEventKind::Press {
         return None;
@@ -27,6 +28,34 @@ pub fn map_key_event(
             }
             _ => None,
         };
+    }
+
+    if overlay_active {
+        return match (key.modifiers, key.code) {
+            (_, KeyCode::Esc) => Some(Action::OverlayCancel),
+            (_, KeyCode::Enter) => Some(Action::OverlayAccept),
+            (_, KeyCode::Backspace) => Some(Action::OverlayBackspace),
+            (modifiers, KeyCode::Char('n')) if modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::OverlayNext)
+            }
+            (modifiers, KeyCode::Char('p')) if modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::OverlayPrevious)
+            }
+            (_, KeyCode::Down) => Some(Action::OverlayNext),
+            (_, KeyCode::Up) => Some(Action::OverlayPrevious),
+            (modifiers, KeyCode::Char(character))
+                if modifiers
+                    .intersection(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                    .is_empty() =>
+            {
+                Some(Action::OverlayInsert(character))
+            }
+            _ => None,
+        };
+    }
+
+    if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
+        return Some(Action::SaveQuery);
     }
 
     if mode == Mode::Insert && key.code == KeyCode::Tab {
@@ -85,9 +114,15 @@ pub fn map_key_event(
     }
 
     if let Some(pending) = sequence.take() {
+        if pending == ' ' && key.code == KeyCode::Char('f') {
+            *sequence = Some('f');
+            return None;
+        }
         return match (pending, key.code) {
             (' ', KeyCode::Char('r')) => Some(Action::RunQuery),
             (' ', KeyCode::Char('?')) => Some(Action::ToggleHelp),
+            ('f', KeyCode::Char('f')) => Some(Action::OpenSavedQueryFinder),
+            ('f', KeyCode::Char('h')) => Some(Action::OpenHistoryFinder),
             ('d', KeyCode::Char('d')) => Some(Action::DeleteCurrentLine),
             ('g', KeyCode::Char('g')) => Some(Action::GoToFirstLine),
             _ => None,
@@ -151,7 +186,8 @@ mod tests {
                 KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Normal,
-                false
+                false,
+                false,
             ),
             None
         );
@@ -160,7 +196,8 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('r'), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Normal,
-                false
+                false,
+                false,
             ),
             Some(Action::RunQuery)
         );
@@ -174,7 +211,8 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Insert,
-                false
+                false,
+                false,
             ),
             Some(Action::Insert('x'))
         );
@@ -188,7 +226,8 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
                 &mut sequence,
                 Mode::Insert,
-                false
+                false,
+                false,
             ),
             Some(Action::NextCompletion)
         );
@@ -202,7 +241,8 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Normal,
-                false
+                false,
+                false,
             ),
             None
         );
@@ -211,7 +251,8 @@ mod tests {
                 KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
                 &mut sequence,
                 Mode::Normal,
-                false
+                false,
+                false,
             ),
             Some(Action::DeleteCurrentLine)
         );
@@ -225,9 +266,82 @@ mod tests {
                 KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL),
                 &mut sequence,
                 Mode::Normal,
-                false
+                false,
+                false,
             ),
             Some(Action::RunQuery)
+        );
+    }
+
+    #[test]
+    fn control_s_saves_query_from_insert_mode() {
+        let mut sequence = None;
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL),
+                &mut sequence,
+                Mode::Insert,
+                false,
+                false,
+            ),
+            Some(Action::SaveQuery)
+        );
+    }
+
+    #[test]
+    fn leader_f_opens_saved_queries_and_history() {
+        for (last_key, expected) in [
+            ('f', Action::OpenSavedQueryFinder),
+            ('h', Action::OpenHistoryFinder),
+        ] {
+            let mut sequence = None;
+            for key in [' ', 'f'] {
+                assert_eq!(
+                    map_key_event(
+                        KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                        &mut sequence,
+                        Mode::Normal,
+                        false,
+                        false,
+                    ),
+                    None
+                );
+            }
+            assert_eq!(
+                map_key_event(
+                    KeyEvent::new(KeyCode::Char(last_key), KeyModifiers::NONE),
+                    &mut sequence,
+                    Mode::Normal,
+                    false,
+                    false,
+                ),
+                Some(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn overlay_captures_search_input_and_navigation() {
+        let mut sequence = None;
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('u'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                false,
+                true,
+            ),
+            Some(Action::OverlayInsert('u'))
+        );
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL),
+                &mut sequence,
+                Mode::Normal,
+                false,
+                true,
+            ),
+            Some(Action::OverlayNext)
         );
     }
 }
