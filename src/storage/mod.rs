@@ -81,6 +81,14 @@ impl Storage {
                  duration_ms INTEGER,
                  error TEXT,
                  executed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+             );
+             CREATE TABLE IF NOT EXISTS open_query_tabs (
+                 workspace TEXT NOT NULL,
+                 database_name TEXT NOT NULL,
+                 saved_query_id INTEGER NOT NULL,
+                 position INTEGER NOT NULL,
+                 active INTEGER NOT NULL DEFAULT 0,
+                 PRIMARY KEY (workspace, database_name, saved_query_id)
              );",
         )?;
         ensure_column(
@@ -179,7 +187,11 @@ impl Storage {
                 file_path: row.get(4)?,
             })
         })?;
-        Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        Ok(rows
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(load_saved_file)
+            .collect())
     }
 
     pub fn record_history(
@@ -226,6 +238,64 @@ impl Storage {
         )?;
         Ok(rows.collect::<Result<Vec<_>, _>>()?)
     }
+
+    pub fn save_tab_session(&mut self, database_name: &str, tabs: &[(i64, bool)]) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        transaction.execute(
+            "DELETE FROM open_query_tabs WHERE workspace=?1 AND database_name=?2",
+            params![self.workspace, database_name],
+        )?;
+        for (position, (saved_query_id, active)) in tabs.iter().enumerate() {
+            transaction.execute(
+                "INSERT INTO open_query_tabs(
+                     workspace, database_name, saved_query_id, position, active
+                 ) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    self.workspace,
+                    database_name,
+                    saved_query_id,
+                    position as i64,
+                    active
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn restore_tab_session(&self, database_name: &str) -> Result<Vec<(SavedQuery, bool)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT q.id, q.name, q.sql, q.database_name, q.file_path, tabs.active
+             FROM open_query_tabs tabs
+             JOIN saved_queries q ON q.id = tabs.saved_query_id
+             WHERE tabs.workspace=?1 AND tabs.database_name=?2
+             ORDER BY tabs.position",
+        )?;
+        let rows = statement.query_map(params![self.workspace, database_name], |row| {
+            Ok((
+                SavedQuery {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    sql: row.get(2)?,
+                    database_name: row.get(3)?,
+                    file_path: row.get(4)?,
+                },
+                row.get(5)?,
+            ))
+        })?;
+        Ok(rows
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .map(|(saved, active)| (load_saved_file(saved), active))
+            .collect())
+    }
+}
+
+fn load_saved_file(mut saved: SavedQuery) -> SavedQuery {
+    if let Ok(sql) = fs::read_to_string(&saved.file_path) {
+        saved.sql = sql;
+    }
+    saved
 }
 
 fn ensure_column(
@@ -272,7 +342,7 @@ fn slug(name: &str) -> String {
 
 fn atomic_write(path: &Path, sql: &str) -> Result<()> {
     let temporary = path.with_extension("sql.tmp");
-    fs::write(&temporary, format!("{}\n", sql.trim_end())).context("write saved query")?;
+    fs::write(&temporary, sql).context("write saved query")?;
     fs::rename(&temporary, path).context("publish saved query")?;
     Ok(())
 }
@@ -335,5 +405,27 @@ mod tests {
 
         assert_eq!(first.saved_queries("app").unwrap().len(), 1);
         assert!(second.saved_queries("app").unwrap().is_empty());
+    }
+
+    #[test]
+    fn saved_tab_session_restores_active_file_backed_query() {
+        let mut storage = Storage::memory().unwrap();
+        let first = storage
+            .save_query(None, "app", "First", "SELECT 1;")
+            .unwrap();
+        let second = storage
+            .save_query(None, "app", "Second", "SELECT 2;")
+            .unwrap();
+        storage
+            .save_tab_session("app", &[(first.id, false), (second.id, true)])
+            .unwrap();
+
+        let restored = storage.restore_tab_session("app").unwrap();
+
+        assert_eq!(restored.len(), 2);
+        assert_eq!(restored[0].0.name, "First");
+        assert!(!restored[0].1);
+        assert_eq!(restored[1].0.name, "Second");
+        assert!(restored[1].1);
     }
 }

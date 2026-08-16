@@ -8,29 +8,55 @@ use ratatui::{
 
 use crate::{
     action::Action,
-    app::{App, ConnectionState, FinderItem, FinderKind, Focus, InspectorSection, Mode},
+    app::{App, ConnectionState, FinderItem, FinderKind, Focus, InspectorSection, Mode, QueryTab},
 };
 
 pub fn mouse_action(column: u16, row: u16, width: u16, height: u16, app: &App) -> Action {
-    let content_top: u16 = 3;
-    let content_height = height.saturating_sub(4);
-    let top_height = content_height.saturating_mul(58) / 100;
-    if row < content_top.saturating_add(top_height) {
-        if column < width.saturating_mul(30) / 100 {
-            if row >= content_top.saturating_add(1) {
-                let visible_height = top_height.saturating_sub(2) as usize;
+    if app.overlay_active() {
+        return Action::Noop;
+    }
+    let frame_area = Rect::new(0, 0, width, height);
+    let outer = Layout::vertical([
+        Constraint::Length(3),
+        Constraint::Min(8),
+        Constraint::Length(1),
+    ])
+    .split(frame_area);
+    let content =
+        Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)]).split(outer[1]);
+    let top = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .split(content[0]);
+    let tabs_area = editor_areas(top[1]).0;
+    if row == tabs_area.y && column >= tabs_area.x && column < tabs_area.right() {
+        let mut start = tabs_area.x;
+        for (index, tab) in app.query_tabs.iter().enumerate() {
+            let label = query_tab_label(app, index, tab);
+            let end = start.saturating_add(label.chars().count() as u16);
+            if column >= start && column < end {
+                return Action::FocusQueryTab(index);
+            }
+            start = end.saturating_add(1);
+        }
+        return Action::FocusEditor;
+    }
+    if row >= top[0].y && row < top[0].bottom() {
+        if column >= top[0].x && column < top[0].right() {
+            if row > top[0].y {
+                let visible_height = top[0].height.saturating_sub(2) as usize;
                 let scroll = app
                     .explorer_selection
                     .saturating_sub(visible_height.saturating_sub(1));
-                Action::ClickExplorerNode(scroll + row.saturating_sub(content_top + 1) as usize)
+                Action::ClickExplorerNode(scroll + row.saturating_sub(top[0].y + 1) as usize)
             } else {
                 Action::FocusExplorer
             }
         } else {
             Action::FocusEditor
         }
-    } else {
+    } else if row >= content[1].y {
         Action::FocusResults
+    } else {
+        Action::Noop
     }
 }
 
@@ -132,17 +158,38 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &App) {
         .count()
         + 1;
     frame.render_widget(
-        Paragraph::new(crate::sql::highlight::lines(&app.query)).block(panel_block(
+        panel_block(
             &format!(
-                "SQL  {}  Ln {cursor_line}, Col {cursor_column}{}",
-                app.mode.label(),
-                app.saved_query_name
-                    .as_deref()
-                    .map_or_else(|| "  ·  Unsaved".into(), |name| format!("  ·  {name}"))
+                "SQL  {}  Ln {cursor_line}, Col {cursor_column}",
+                app.mode.label()
             ),
             app.focus == Focus::Editor,
-        )),
+        ),
         area,
+    );
+    let (tabs_area, sql_area) = editor_areas(area);
+    let tabs = app
+        .query_tabs
+        .iter()
+        .enumerate()
+        .flat_map(|(index, tab)| {
+            let active = index == app.active_query_tab;
+            let label = query_tab_label(app, index, tab);
+            let style = if active {
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::LightBlue)
+            };
+            [Span::styled(label, style), Span::raw(" ")]
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(Line::from(tabs)), tabs_area);
+    frame.render_widget(
+        Paragraph::new(crate::sql::highlight::lines(&app.query)),
+        sql_area,
     );
     if app.focus == Focus::Editor && !app.help_visible && !app.overlay_active() {
         let prefix = &app.query[..app.cursor];
@@ -156,18 +203,38 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &App) {
             .unwrap_or_default()
             .chars()
             .count() as u16;
-        let x = area
+        let x = sql_area
             .x
-            .saturating_add(1)
             .saturating_add(column)
-            .min(area.right().saturating_sub(2));
-        let y = area
+            .min(sql_area.right().saturating_sub(1));
+        let y = sql_area
             .y
-            .saturating_add(1)
             .saturating_add(row)
-            .min(area.bottom().saturating_sub(2));
+            .min(sql_area.bottom().saturating_sub(1));
         frame.set_cursor_position((x, y));
     }
+}
+
+fn query_tab_label(app: &App, index: usize, tab: &QueryTab) -> String {
+    let name = tab
+        .name
+        .as_deref()
+        .map_or_else(|| format!("scratch-{}", index + 1), str::to_owned);
+    let modified = if index == app.active_query_tab {
+        app.active_query_is_modified()
+    } else {
+        tab.is_modified()
+    };
+    format!(" {name}{} ", if modified { " ●" } else { "" })
+}
+
+fn editor_areas(area: Rect) -> (Rect, Rect) {
+    let inner = area.inner(Margin {
+        horizontal: 1,
+        vertical: 1,
+    });
+    let sections = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
+    (sections[0], sections[1])
 }
 
 fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
@@ -486,6 +553,7 @@ fn draw_completion(frame: &mut Frame, editor_area: Rect, app: &App) {
     if candidates.is_empty() {
         return;
     }
+    let editor_area = editor_areas(editor_area).1;
     let selected_completion = app.completion_index.min(candidates.len().saturating_sub(1));
     let before = &app.query[..app.cursor];
     let row = before.bytes().filter(|byte| *byte == b'\n').count() as u16;
@@ -565,7 +633,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     } else if app.key_sequence == Some('d') {
         "d…  d Delete current line  •  Esc Cancel"
     } else if app.key_sequence == Some('g') {
-        "g…  g First line  •  Esc Cancel"
+        "g…  g First line  •  t Next tab  •  T Previous tab  •  Esc Cancel"
     } else if app.mode == Mode::Insert {
         "Esc Normal  •  type to edit"
     } else {
@@ -810,6 +878,7 @@ fn draw_help(frame: &mut Frame) {
         key_line("0 / ^ / $", "Line start / first non-blank / line end"),
         key_line("w / b / e", "Next word / previous word / word end"),
         key_line("gg / G", "First line / last line"),
+        key_line("gt / gT", "Next / previous SQL buffer tab"),
         key_line("Arrow keys", "Move in either mode"),
         key_line("Tab / S-Tab", "Cycle Explorer → SQL → Results panels"),
         key_line("1 / 2 / 3", "Jump directly to Explorer / SQL / Results"),

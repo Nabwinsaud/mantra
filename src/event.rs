@@ -126,6 +126,8 @@ pub fn map_key_event(
             ('f', KeyCode::Char('s')) => Some(Action::SaveQueryAs),
             ('d', KeyCode::Char('d')) => Some(Action::DeleteCurrentLine),
             ('g', KeyCode::Char('g')) => Some(Action::GoToFirstLine),
+            ('g', KeyCode::Char('t')) => Some(Action::NextQueryTab),
+            ('g', KeyCode::Char('T')) => Some(Action::PreviousQueryTab),
             _ => None,
         };
     }
@@ -345,5 +347,32 @@ mod tests {
             ),
             Some(Action::OverlayNext)
         );
+    }
+
+    #[test]
+    fn gt_cycles_query_tabs() {
+        for (last_key, expected) in [('t', Action::NextQueryTab), ('T', Action::PreviousQueryTab)] {
+            let mut sequence = None;
+            assert_eq!(
+                map_key_event(
+                    KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE),
+                    &mut sequence,
+                    Mode::Normal,
+                    false,
+                    false,
+                ),
+                None
+            );
+            assert_eq!(
+                map_key_event(
+                    KeyEvent::new(KeyCode::Char(last_key), KeyModifiers::NONE),
+                    &mut sequence,
+                    Mode::Normal,
+                    false,
+                    false,
+                ),
+                Some(expected)
+            );
+        }
     }
 }

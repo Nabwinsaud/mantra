@@ -1,5 +1,6 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Action {
+    Noop,
     Quit,
     EnterInsertMode,
     EnterNormalMode,
@@ -14,6 +15,9 @@ pub enum Action {
     FocusExplorer,
     FocusEditor,
     FocusResults,
+    FocusQueryTab(usize),
+    NextQueryTab,
+    PreviousQueryTab,
     ClickExplorerNode(usize),
     AcceptCompletion,
     NextCompletion,

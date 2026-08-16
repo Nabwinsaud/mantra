@@ -31,6 +31,7 @@ The connection URL is used only in memory and is never displayed or logged.
 - `<leader>ff`: fuzzy-find saved queries for the current project and database
 - `<leader>fh`: fuzzy-find automatically recorded query history
 - `<leader>fs`: save the current SQL as a new query instead of updating the opened one
+- `gt` / `gT`: move to the next / previous SQL buffer tab
 - `o`: open a new line below and enter INSERT mode
 - `dd`: delete the current line
 - `a` / `A`: append after cursor / at line end
@@ -66,6 +67,13 @@ history are stored in PGIDE's platform-local SQLite database.
 
 Every query sent to PostgreSQL is recorded with its success state, execution time, database, and
 timestamp. Connection strings and credentials are never stored in query history.
+
+Saved queries open as file-backed editor tabs. Opening the same saved query again focuses its
+existing tab, and `Ctrl-s` updates that file without asking for its name again. A `●` beside a tab
+means its buffer has changes that have not been saved. Open saved tabs and the active tab are
+restored the next time the same project and database are opened; click a tab or use `gt` / `gT` to
+switch between them. If an older workspace has saved queries but no tab session yet, PGIDE opens
+the most recently saved query automatically.
 
 The Results panel supports selected-cell navigation with `h/j/k/l`, horizontal column paging,
 vertical row scrolling, row numbers, NULL styling, and native rendering for UUID, date/time,

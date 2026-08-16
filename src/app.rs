@@ -127,6 +127,23 @@ pub struct SaveDialogState {
     pub save_as: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct QueryTab {
+    pub query: String,
+    pub cursor: usize,
+    pub saved_query_id: Option<i64>,
+    pub name: Option<String>,
+    pub saved_snapshot: Option<String>,
+}
+
+impl QueryTab {
+    pub fn is_modified(&self) -> bool {
+        self.saved_snapshot
+            .as_deref()
+            .is_none_or(|saved| saved != self.query)
+    }
+}
+
 pub struct App {
     pub mode: Mode,
     pub connection: ConnectionState,
@@ -156,10 +173,14 @@ pub struct App {
     pub save_dialog: Option<SaveDialogState>,
     pub saved_query_id: Option<i64>,
     pub saved_query_name: Option<String>,
+    pub saved_query_snapshot: Option<String>,
+    pub query_tabs: Vec<QueryTab>,
+    pub active_query_tab: usize,
     pub status_message: Option<String>,
     running_statement: Option<String>,
     database: DatabaseService,
     storage: Storage,
+    restored_database: Option<String>,
 }
 
 impl App {
@@ -172,11 +193,12 @@ impl App {
     }
 
     pub fn with_storage(database: DatabaseService, storage: Storage) -> Self {
+        let query = "SELECT 1;".to_owned();
         Self {
             mode: Mode::Normal,
             connection: ConnectionState::Disconnected,
             database_name: None,
-            query: "SELECT 1;".into(),
+            query: query.clone(),
             cursor: 9,
             result: None,
             error: None,
@@ -201,10 +223,20 @@ impl App {
             save_dialog: None,
             saved_query_id: None,
             saved_query_name: None,
+            saved_query_snapshot: None,
+            query_tabs: vec![QueryTab {
+                query,
+                cursor: 9,
+                saved_query_id: None,
+                name: None,
+                saved_snapshot: None,
+            }],
+            active_query_tab: 0,
             status_message: None,
             running_statement: None,
             database,
             storage,
+            restored_database: None,
         }
     }
 
@@ -219,6 +251,7 @@ impl App {
 
     pub async fn update(&mut self, action: Action) {
         match action {
+            Action::Noop => {}
             Action::Quit => self.should_quit = true,
             Action::EnterInsertMode => {
                 self.mode = Mode::Insert;
@@ -360,13 +393,11 @@ impl App {
                 if let Some(details) = &self.inspector {
                     let schema = details.schema.replace('"', "\"\"");
                     let table = details.name.replace('"', "\"\"");
-                    self.query = format!("SELECT *\nFROM \"{schema}\".\"{table}\"\nLIMIT 100;");
-                    self.cursor = self.query.len();
+                    let query = format!("SELECT *\nFROM \"{schema}\".\"{table}\"\nLIMIT 100;");
+                    self.open_scratch_tab(query);
                     self.inspector = None;
                     self.result = None;
                     self.error = None;
-                    self.saved_query_id = None;
-                    self.saved_query_name = None;
                     self.query_running = true;
                     self.focus = Focus::Results;
                     if self.database.execute(self.query.clone()).await.is_err() {
@@ -411,6 +442,18 @@ impl App {
             Action::FocusExplorer => self.focus = Focus::Explorer,
             Action::FocusEditor => self.focus = Focus::Editor,
             Action::FocusResults => self.focus = Focus::Results,
+            Action::FocusQueryTab(index) => self.activate_query_tab(index),
+            Action::NextQueryTab => {
+                let next = (self.active_query_tab + 1) % self.query_tabs.len();
+                self.activate_query_tab(next);
+            }
+            Action::PreviousQueryTab => {
+                let previous = self
+                    .active_query_tab
+                    .checked_sub(1)
+                    .unwrap_or(self.query_tabs.len() - 1);
+                self.activate_query_tab(previous);
+            }
             Action::ClickExplorerNode(index) => {
                 self.focus = Focus::Explorer;
                 self.explorer_selection =
@@ -556,9 +599,7 @@ impl App {
                 catalog,
             } => {
                 self.connection = ConnectionState::Connected;
-                self.database_name = Some(database_name);
-                self.saved_query_id = None;
-                self.saved_query_name = None;
+                self.database_name = Some(database_name.clone());
                 self.completion_items = completion_items;
                 self.relation_items = relation_items;
                 self.catalog = catalog;
@@ -566,6 +607,7 @@ impl App {
                     self.explorer_open.insert(format!("schema:{}", schema.name));
                 }
                 self.error = None;
+                self.restore_query_tab_session(&database_name);
             }
             DatabaseEvent::ConnectionFailed(message) => {
                 self.connection = ConnectionState::Disconnected;
@@ -619,6 +661,155 @@ impl App {
 
     pub fn elapsed(&self) -> Option<Duration> {
         self.result.as_ref().map(|result| result.elapsed)
+    }
+
+    pub fn active_query_is_modified(&self) -> bool {
+        self.saved_query_snapshot
+            .as_deref()
+            .is_none_or(|saved| saved != self.query)
+    }
+
+    fn sync_active_query_tab(&mut self) {
+        if let Some(tab) = self.query_tabs.get_mut(self.active_query_tab) {
+            tab.query.clone_from(&self.query);
+            tab.cursor = self.cursor;
+            tab.saved_query_id = self.saved_query_id;
+            tab.name.clone_from(&self.saved_query_name);
+            tab.saved_snapshot.clone_from(&self.saved_query_snapshot);
+        }
+    }
+
+    fn activate_query_tab(&mut self, index: usize) {
+        if index >= self.query_tabs.len() {
+            return;
+        }
+        self.sync_active_query_tab();
+        self.active_query_tab = index;
+        let tab = self.query_tabs[index].clone();
+        self.query = tab.query;
+        self.cursor = tab.cursor.min(self.query.len());
+        self.saved_query_id = tab.saved_query_id;
+        self.saved_query_name = tab.name;
+        self.saved_query_snapshot = tab.saved_snapshot;
+        self.mode = Mode::Normal;
+        self.focus = Focus::Editor;
+        self.completion_index = 0;
+        self.persist_query_tab_session();
+    }
+
+    fn open_saved_query_tab(&mut self, saved: SavedQuery) {
+        if let Some(index) = self
+            .query_tabs
+            .iter()
+            .position(|tab| tab.saved_query_id == Some(saved.id))
+        {
+            self.activate_query_tab(index);
+            return;
+        }
+        self.sync_active_query_tab();
+        let cursor = saved.sql.len();
+        self.query_tabs.push(QueryTab {
+            query: saved.sql.clone(),
+            cursor,
+            saved_query_id: Some(saved.id),
+            name: Some(saved.name.clone()),
+            saved_snapshot: Some(saved.sql.clone()),
+        });
+        self.active_query_tab = self.query_tabs.len() - 1;
+        self.query = saved.sql.clone();
+        self.cursor = cursor;
+        self.saved_query_id = Some(saved.id);
+        self.saved_query_name = Some(saved.name.clone());
+        self.saved_query_snapshot = Some(saved.sql);
+        self.mode = Mode::Normal;
+        self.focus = Focus::Editor;
+        self.completion_index = 0;
+        self.status_message = Some(format!("Opened '{}'", saved.name));
+        self.persist_query_tab_session();
+    }
+
+    fn open_scratch_tab(&mut self, query: String) {
+        self.sync_active_query_tab();
+        let cursor = query.len();
+        self.query_tabs.push(QueryTab {
+            query: query.clone(),
+            cursor,
+            saved_query_id: None,
+            name: None,
+            saved_snapshot: None,
+        });
+        self.active_query_tab = self.query_tabs.len() - 1;
+        self.query = query;
+        self.cursor = cursor;
+        self.saved_query_id = None;
+        self.saved_query_name = None;
+        self.saved_query_snapshot = None;
+        self.mode = Mode::Normal;
+        self.focus = Focus::Editor;
+        self.completion_index = 0;
+        self.persist_query_tab_session();
+    }
+
+    fn persist_query_tab_session(&mut self) {
+        let Some(database_name) = self.database_name.as_deref() else {
+            return;
+        };
+        let tabs = self
+            .query_tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(index, tab)| {
+                tab.saved_query_id
+                    .map(|id| (id, index == self.active_query_tab))
+            })
+            .collect::<Vec<_>>();
+        if let Err(error) = self.storage.save_tab_session(database_name, &tabs) {
+            self.status_message = Some(format!("Could not save tab session: {error}"));
+        }
+    }
+
+    fn restore_query_tab_session(&mut self, database_name: &str) {
+        if self.restored_database.as_deref() == Some(database_name) {
+            return;
+        }
+        self.restored_database = Some(database_name.to_owned());
+        let Ok(mut restored) = self.storage.restore_tab_session(database_name) else {
+            self.status_message = Some("Could not restore saved query tabs".into());
+            return;
+        };
+        if restored.is_empty()
+            && let Ok(saved) = self.storage.saved_queries(database_name)
+            && let Some(most_recent) = saved.into_iter().next()
+        {
+            restored.push((most_recent, true));
+        }
+        self.sync_active_query_tab();
+        let mut active = None;
+        for (saved, is_active) in restored {
+            let index = if let Some(index) = self
+                .query_tabs
+                .iter()
+                .position(|tab| tab.saved_query_id == Some(saved.id))
+            {
+                index
+            } else {
+                let cursor = saved.sql.len();
+                self.query_tabs.push(QueryTab {
+                    query: saved.sql.clone(),
+                    cursor,
+                    saved_query_id: Some(saved.id),
+                    name: Some(saved.name),
+                    saved_snapshot: Some(saved.sql),
+                });
+                self.query_tabs.len() - 1
+            };
+            if is_active {
+                active = Some(index);
+            }
+        }
+        if let Some(index) = active {
+            self.activate_query_tab(index);
+        }
     }
 
     pub fn overlay_active(&self) -> bool {
@@ -706,6 +897,9 @@ impl App {
             Ok(saved) => {
                 self.saved_query_id = Some(saved.id);
                 self.saved_query_name = Some(saved.name.clone());
+                self.saved_query_snapshot = Some(saved.sql.clone());
+                self.sync_active_query_tab();
+                self.persist_query_tab_session();
                 self.status_message = Some(format!("Saved '{}'", saved.name));
             }
             Err(error) => self.status_message = Some(format!("Save failed: {error}")),
@@ -794,24 +988,28 @@ impl App {
         let Some(index) = matches.get(finder.selected).copied() else {
             return;
         };
-        let item = &finder.items[index];
-        self.query = item.sql().into();
-        self.cursor = self.query.len();
-        self.focus = Focus::Editor;
-        self.mode = Mode::Normal;
+        let item = finder.items[index].clone();
         self.inspector = None;
         self.inspector_loading = false;
         self.error = None;
         match item {
             FinderItem::Saved(saved) => {
-                self.saved_query_id = Some(saved.id);
-                self.saved_query_name = Some(saved.name.clone());
-                self.status_message = Some(format!("Opened '{}'", saved.name));
+                self.open_saved_query_tab(saved);
             }
-            FinderItem::History(_) => {
-                self.saved_query_id = None;
-                self.saved_query_name = None;
-                self.status_message = Some("Opened query from history".into());
+            FinderItem::History(entry) => {
+                let matching_saved = self.database_name.as_deref().and_then(|database_name| {
+                    self.storage
+                        .saved_queries(database_name)
+                        .ok()?
+                        .into_iter()
+                        .find(|saved| saved.sql.trim_end() == entry.sql.trim_end())
+                });
+                if let Some(saved) = matching_saved {
+                    self.open_saved_query_tab(saved);
+                } else {
+                    self.open_scratch_tab(entry.sql);
+                    self.status_message = Some("Opened history in a new scratch tab".into());
+                }
             }
         }
     }
@@ -1126,8 +1324,16 @@ mod tests {
 
         let saved_id = app.saved_query_id.expect("saved query id");
         assert_eq!(app.saved_query_name.as_deref(), Some("Health check"));
+        app.handle_database_event(DatabaseEvent::Connected {
+            database_name: "project_db".into(),
+            completion_items: Vec::new(),
+            relation_items: Vec::new(),
+            catalog: DatabaseCatalog::default(),
+        });
+        assert_eq!(app.saved_query_id, Some(saved_id));
         app.query = "SELECT 2;".into();
         app.update(Action::SaveQuery).await;
+        assert!(app.save_dialog.is_none());
 
         let saved = app.storage.saved_queries("project_db").unwrap();
         assert_eq!(saved.len(), 1);
@@ -1165,6 +1371,31 @@ mod tests {
         assert_eq!(app.query, "SELECT 42;");
         assert_eq!(app.saved_query_name.as_deref(), Some("Daily revenue"));
         assert!(app.finder.is_none());
+    }
+
+    #[tokio::test]
+    async fn query_tabs_preserve_each_buffers_text_and_saved_identity() {
+        let mut app = app();
+        app.connection = ConnectionState::Connected;
+        app.database_name = Some("project_db".into());
+        let first = app
+            .storage
+            .save_query(None, "project_db", "First", "SELECT 1;")
+            .unwrap();
+        let second = app
+            .storage
+            .save_query(None, "project_db", "Second", "SELECT 2;")
+            .unwrap();
+
+        app.open_saved_query_tab(first.clone());
+        app.query.push_str("\n-- edited");
+        app.open_saved_query_tab(second);
+        app.update(Action::PreviousQueryTab).await;
+
+        assert_eq!(app.saved_query_id, Some(first.id));
+        assert_eq!(app.saved_query_name.as_deref(), Some("First"));
+        assert!(app.query.ends_with("-- edited"));
+        assert!(app.active_query_is_modified());
     }
 
     #[tokio::test]
