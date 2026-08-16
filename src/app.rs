@@ -127,6 +127,10 @@ pub struct SaveDialogState {
     pub save_as: bool,
 }
 
+pub struct CloseTabDialogState {
+    pub tab_index: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct QueryTab {
     pub query: String,
@@ -140,7 +144,7 @@ impl QueryTab {
     pub fn is_modified(&self) -> bool {
         self.saved_snapshot
             .as_deref()
-            .is_none_or(|saved| saved != self.query)
+            .map_or_else(|| !self.query.is_empty(), |saved| saved != self.query)
     }
 }
 
@@ -171,6 +175,7 @@ pub struct App {
     pub inspector_section: InspectorSection,
     pub finder: Option<FinderState>,
     pub save_dialog: Option<SaveDialogState>,
+    pub close_tab_dialog: Option<CloseTabDialogState>,
     pub saved_query_id: Option<i64>,
     pub saved_query_name: Option<String>,
     pub saved_query_snapshot: Option<String>,
@@ -221,6 +226,7 @@ impl App {
             inspector_section: InspectorSection::Columns,
             finder: None,
             save_dialog: None,
+            close_tab_dialog: None,
             saved_query_id: None,
             saved_query_name: None,
             saved_query_snapshot: None,
@@ -420,6 +426,7 @@ impl App {
             Action::OverlayCancel => {
                 self.finder = None;
                 self.save_dialog = None;
+                self.close_tab_dialog = None;
             }
             Action::ToggleHelp => self.help_visible = !self.help_visible,
             Action::FocusNext => {
@@ -447,6 +454,12 @@ impl App {
                 self.open_scratch_tab(String::new());
                 self.status_message = Some("Opened a new SQL buffer".into());
             }
+            Action::RequestCloseQueryTab => {
+                self.close_tab_dialog = Some(CloseTabDialogState {
+                    tab_index: self.active_query_tab,
+                });
+            }
+            Action::ConfirmCloseQueryTab => self.confirm_close_query_tab(),
             Action::NextQueryTab => {
                 let next = (self.active_query_tab + 1) % self.query_tabs.len();
                 self.activate_query_tab(next);
@@ -670,7 +683,7 @@ impl App {
     pub fn active_query_is_modified(&self) -> bool {
         self.saved_query_snapshot
             .as_deref()
-            .is_none_or(|saved| saved != self.query)
+            .map_or_else(|| !self.query.is_empty(), |saved| saved != self.query)
     }
 
     fn sync_active_query_tab(&mut self) {
@@ -688,6 +701,11 @@ impl App {
             return;
         }
         self.sync_active_query_tab();
+        self.load_query_tab(index);
+        self.persist_query_tab_session();
+    }
+
+    fn load_query_tab(&mut self, index: usize) {
         self.active_query_tab = index;
         let tab = self.query_tabs[index].clone();
         self.query = tab.query;
@@ -698,7 +716,33 @@ impl App {
         self.mode = Mode::Normal;
         self.focus = Focus::Editor;
         self.completion_index = 0;
+    }
+
+    fn confirm_close_query_tab(&mut self) {
+        let Some(dialog) = self.close_tab_dialog.take() else {
+            return;
+        };
+        if dialog.tab_index >= self.query_tabs.len() {
+            return;
+        }
+        self.sync_active_query_tab();
+        let closed = self.query_tabs.remove(dialog.tab_index);
+        if self.query_tabs.is_empty() {
+            self.query_tabs.push(QueryTab {
+                query: String::new(),
+                cursor: 0,
+                saved_query_id: None,
+                name: None,
+                saved_snapshot: None,
+            });
+        }
+        let next = dialog.tab_index.min(self.query_tabs.len() - 1);
+        self.load_query_tab(next);
         self.persist_query_tab_session();
+        self.status_message = Some(match closed.name {
+            Some(name) => format!("Closed '{name}'; the saved query remains on disk"),
+            None => "Closed scratch tab; its buffer was discarded".into(),
+        });
     }
 
     fn open_saved_query_tab(&mut self, saved: SavedQuery) {
@@ -817,7 +861,7 @@ impl App {
     }
 
     pub fn overlay_active(&self) -> bool {
-        self.finder.is_some() || self.save_dialog.is_some()
+        self.finder.is_some() || self.save_dialog.is_some() || self.close_tab_dialog.is_some()
     }
 
     pub fn finder_matches(&self) -> Vec<usize> {
@@ -939,7 +983,13 @@ impl App {
     }
 
     fn overlay_insert(&mut self, character: char) {
-        if let Some(dialog) = &mut self.save_dialog {
+        if self.close_tab_dialog.is_some() {
+            match character.to_ascii_lowercase() {
+                'y' => self.confirm_close_query_tab(),
+                'n' => self.close_tab_dialog = None,
+                _ => {}
+            }
+        } else if let Some(dialog) = &mut self.save_dialog {
             dialog.input.push(character);
         } else if let Some(finder) = &mut self.finder {
             finder.input.push(character);
@@ -971,6 +1021,10 @@ impl App {
     }
 
     fn overlay_accept(&mut self) {
+        if self.close_tab_dialog.is_some() {
+            self.close_tab_dialog = None;
+            return;
+        }
         if let Some(dialog) = self.save_dialog.take() {
             let name = dialog.input.trim().to_owned();
             if name.is_empty() {
@@ -1416,6 +1470,49 @@ mod tests {
         assert_eq!(app.saved_query_id, None);
         app.update(Action::PreviousQueryTab).await;
         assert_eq!(app.query, "SELECT important_data;");
+    }
+
+    #[tokio::test]
+    async fn closing_a_saved_tab_never_deletes_its_query_or_file() {
+        let mut app = app();
+        app.connection = ConnectionState::Connected;
+        app.database_name = Some("project_db".into());
+        let saved = app
+            .storage
+            .save_query(None, "project_db", "Keep me", "SELECT 1;")
+            .unwrap();
+        let file_path = saved.file_path.clone();
+        app.open_saved_query_tab(saved);
+
+        app.update(Action::RequestCloseQueryTab).await;
+        assert!(app.close_tab_dialog.is_some());
+        app.update(Action::OverlayInsert('y')).await;
+
+        assert!(app.close_tab_dialog.is_none());
+        assert!(std::path::Path::new(&file_path).exists());
+        assert_eq!(app.storage.saved_queries("project_db").unwrap().len(), 1);
+        assert!(
+            app.storage
+                .restore_tab_session("project_db")
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            app.query_tabs
+                .iter()
+                .all(|tab| tab.name.as_deref() != Some("Keep me"))
+        );
+    }
+
+    #[tokio::test]
+    async fn closing_the_final_tab_leaves_a_fresh_scratch_buffer() {
+        let mut app = app();
+        app.update(Action::RequestCloseQueryTab).await;
+        app.update(Action::ConfirmCloseQueryTab).await;
+
+        assert_eq!(app.query_tabs.len(), 1);
+        assert!(app.query.is_empty());
+        assert_eq!(app.saved_query_id, None);
     }
 
     #[tokio::test]

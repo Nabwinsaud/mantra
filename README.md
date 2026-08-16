@@ -29,6 +29,7 @@ The connection URL is used only in memory and is never displayed or logged.
 - `Ctrl-Enter` or `<leader>r`: run the statement under the cursor and focus Results
 - `Ctrl-s`: save the current query; the first save asks for a name
 - `Ctrl-n` in the NORMAL SQL editor, or `<leader>n`: open a new empty query tab
+- `<leader>bd`: close the current tab after confirmation without deleting its saved query
 - `<leader>ff`: fuzzy-find saved queries for the current project and database
 - `<leader>fh`: fuzzy-find automatically recorded query history
 - `<leader>fs`: save the current SQL as a new query instead of updating the opened one
@@ -75,6 +76,10 @@ means its buffer has changes that have not been saved. Open saved tabs and the a
 restored the next time the same project and database are opened; click a tab or use `gt` / `gT` to
 switch between them. If an older workspace has saved queries but no tab session yet, PGIDE opens
 the most recently saved query automatically.
+
+`<leader>bd` (Space, `b`, `d`) closes only the editor tab. PGIDE always asks first, including for
+unnamed scratch buffers. Press `y` or click **Close tab** to confirm; press `n`, `Esc`, or click
+**Cancel** to keep it open. Saved-query records and `.sql` files are never deleted by this action.
 
 The Results panel supports selected-cell navigation with `h/j/k/l`, horizontal column paging,
 vertical row scrolling, row numbers, NULL styling, and native rendering for UUID, date/time,

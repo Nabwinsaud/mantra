@@ -123,6 +123,10 @@ pub fn map_key_event(
             *sequence = Some('f');
             return None;
         }
+        if pending == ' ' && key.code == KeyCode::Char('b') {
+            *sequence = Some('b');
+            return None;
+        }
         return match (pending, key.code) {
             (' ', KeyCode::Char('r')) => Some(Action::RunQuery),
             (' ', KeyCode::Char('n')) => Some(Action::NewQueryTab),
@@ -130,6 +134,7 @@ pub fn map_key_event(
             ('f', KeyCode::Char('f')) => Some(Action::OpenSavedQueryFinder),
             ('f', KeyCode::Char('h')) => Some(Action::OpenHistoryFinder),
             ('f', KeyCode::Char('s')) => Some(Action::SaveQueryAs),
+            ('b', KeyCode::Char('d')) => Some(Action::RequestCloseQueryTab),
             ('d', KeyCode::Char('d')) => Some(Action::DeleteCurrentLine),
             ('g', KeyCode::Char('g')) => Some(Action::GoToFirstLine),
             ('g', KeyCode::Char('t')) => Some(Action::NextQueryTab),
@@ -420,6 +425,35 @@ mod tests {
                 false,
             ),
             Some(Action::MoveDown)
+        );
+    }
+
+    #[test]
+    fn leader_bd_requests_closing_the_current_buffer() {
+        let mut sequence = None;
+        for key in [' ', 'b'] {
+            assert_eq!(
+                map_key_event(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    &mut sequence,
+                    Mode::Normal,
+                    Focus::Editor,
+                    false,
+                    false,
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::RequestCloseQueryTab)
         );
     }
 }

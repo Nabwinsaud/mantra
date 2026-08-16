@@ -12,6 +12,17 @@ use crate::{
 };
 
 pub fn mouse_action(column: u16, row: u16, width: u16, height: u16, app: &App) -> Action {
+    if app.close_tab_dialog.is_some() {
+        let area = close_dialog_area(Rect::new(0, 0, width, height));
+        let (cancel, confirm) = close_dialog_buttons(area);
+        if contains(confirm, column, row) {
+            return Action::ConfirmCloseQueryTab;
+        }
+        if contains(cancel, column, row) {
+            return Action::OverlayCancel;
+        }
+        return Action::Noop;
+    }
     if app.overlay_active() {
         return Action::Noop;
     }
@@ -98,6 +109,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     }
     if app.save_dialog.is_some() {
         draw_save_dialog(frame, app);
+    }
+    if app.close_tab_dialog.is_some() {
+        draw_close_tab_dialog(frame, app);
     }
     if app.help_visible {
         draw_help(frame);
@@ -630,6 +644,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         "LEADER  n New query  •  r Run  •  f Find  •  ? Help"
     } else if app.key_sequence == Some('f') {
         "LEADER f…  f Saved queries  •  h History  •  s Save as  •  Esc Cancel"
+    } else if app.key_sequence == Some('b') {
+        "LEADER b…  d Close current query tab  •  Esc Cancel"
     } else if app.key_sequence == Some('d') {
         "d…  d Delete current line  •  Esc Cancel"
     } else if app.key_sequence == Some('g') {
@@ -708,6 +724,79 @@ fn draw_save_dialog(frame: &mut Frame, app: &App) {
             .saturating_add(2 + dialog.input.chars().count() as u16),
         rows[0].y,
     ));
+}
+
+fn draw_close_tab_dialog(frame: &mut Frame, app: &App) {
+    let Some(dialog) = &app.close_tab_dialog else {
+        return;
+    };
+    let Some(tab) = app.query_tabs.get(dialog.tab_index) else {
+        return;
+    };
+    let area = close_dialog_area(frame.area());
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(" Close query tab? ")
+        .title_style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Red))
+        .padding(Padding::uniform(1));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let name = tab.name.as_deref().unwrap_or("Unnamed scratch buffer");
+    let warning = if tab.saved_query_id.is_some() {
+        if tab.is_modified() {
+            "Unsaved edits will be discarded. The saved query and .sql file will remain."
+        } else {
+            "Only this editor tab will close. The saved query and .sql file will remain."
+        }
+    } else {
+        "This unnamed buffer will be discarded. No saved query or file will be deleted."
+    };
+    frame.render_widget(
+        Paragraph::new(vec![
+            Line::styled(name, Style::default().add_modifier(Modifier::BOLD)),
+            Line::from(""),
+            Line::styled(warning, Style::default().fg(Color::Yellow)),
+        ])
+        .wrap(Wrap { trim: false }),
+        inner,
+    );
+    let (cancel, confirm) = close_dialog_buttons(area);
+    frame.render_widget(
+        Paragraph::new(" [ Cancel ] ").style(
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        cancel,
+    );
+    frame.render_widget(
+        Paragraph::new(" [ Close tab ] ").style(
+            Style::default()
+                .fg(Color::White)
+                .bg(Color::Red)
+                .add_modifier(Modifier::BOLD),
+        ),
+        confirm,
+    );
+}
+
+fn close_dialog_area(area: Rect) -> Rect {
+    centered_fixed(76, 10, area)
+}
+
+fn close_dialog_buttons(area: Rect) -> (Rect, Rect) {
+    let y = area.bottom().saturating_sub(3);
+    (
+        Rect::new(area.x.saturating_add(2), y, 12, 1),
+        Rect::new(area.right().saturating_sub(17), y, 15, 1),
+    )
+}
+
+fn contains(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x && column < area.right() && row >= area.y && row < area.bottom()
 }
 
 fn draw_finder(frame: &mut Frame, app: &App) {
@@ -859,6 +948,7 @@ fn draw_help(frame: &mut Frame) {
             "Ctrl-n / Space n",
             "New SQL buffer (from NORMAL editor mode)",
         ),
+        key_line("Space b d", "Close current tab after confirmation"),
         key_line("Space f f", "Find saved queries for this database"),
         key_line("Space f h", "Search query history"),
         key_line("Space f s", "Save current SQL as a new query"),

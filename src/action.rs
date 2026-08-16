@@ -17,6 +17,8 @@ pub enum Action {
     FocusResults,
     FocusQueryTab(usize),
     NewQueryTab,
+    RequestCloseQueryTab,
+    ConfirmCloseQueryTab,
     NextQueryTab,
     PreviousQueryTab,
     ClickExplorerNode(usize),
