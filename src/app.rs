@@ -124,6 +124,7 @@ pub struct FinderState {
 
 pub struct SaveDialogState {
     pub input: String,
+    pub save_as: bool,
 }
 
 pub struct App {
@@ -377,6 +378,7 @@ impl App {
                 }
             }
             Action::SaveQuery => self.save_query(),
+            Action::SaveQueryAs => self.save_query_as(),
             Action::OpenSavedQueryFinder => self.open_finder(FinderKind::SavedQueries),
             Action::OpenHistoryFinder => self.open_finder(FinderKind::History),
             Action::OverlayInsert(character) => self.overlay_insert(character),
@@ -671,10 +673,22 @@ impl App {
         if self.saved_query_id.is_none() {
             self.save_dialog = Some(SaveDialogState {
                 input: self.saved_query_name.clone().unwrap_or_default(),
+                save_as: false,
             });
             return;
         }
         self.persist_saved_query();
+    }
+
+    fn save_query_as(&mut self) {
+        if self.database_name.is_none() {
+            self.status_message = Some("Connect to a database before saving a query".into());
+            return;
+        }
+        self.save_dialog = Some(SaveDialogState {
+            input: String::new(),
+            save_as: true,
+        });
     }
 
     fn persist_saved_query(&mut self) {
@@ -765,6 +779,9 @@ impl App {
                 self.status_message = Some("Query name cannot be empty".into());
                 self.save_dialog = Some(dialog);
                 return;
+            }
+            if dialog.save_as {
+                self.saved_query_id = None;
             }
             self.saved_query_name = Some(name);
             self.persist_saved_query();
@@ -1116,6 +1133,14 @@ mod tests {
         assert_eq!(saved.len(), 1);
         assert_eq!(saved[0].id, saved_id);
         assert_eq!(saved[0].sql, "SELECT 2;");
+
+        app.update(Action::SaveQueryAs).await;
+        for character in "Second check".chars() {
+            app.update(Action::OverlayInsert(character)).await;
+        }
+        app.update(Action::OverlayAccept).await;
+        assert_eq!(app.storage.saved_queries("project_db").unwrap().len(), 2);
+        assert_eq!(app.saved_query_name.as_deref(), Some("Second check"));
     }
 
     #[tokio::test]

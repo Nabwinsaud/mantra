@@ -123,6 +123,7 @@ pub fn map_key_event(
             (' ', KeyCode::Char('?')) => Some(Action::ToggleHelp),
             ('f', KeyCode::Char('f')) => Some(Action::OpenSavedQueryFinder),
             ('f', KeyCode::Char('h')) => Some(Action::OpenHistoryFinder),
+            ('f', KeyCode::Char('s')) => Some(Action::SaveQueryAs),
             ('d', KeyCode::Char('d')) => Some(Action::DeleteCurrentLine),
             ('g', KeyCode::Char('g')) => Some(Action::GoToFirstLine),
             _ => None,
@@ -293,6 +294,7 @@ mod tests {
         for (last_key, expected) in [
             ('f', Action::OpenSavedQueryFinder),
             ('h', Action::OpenHistoryFinder),
+            ('s', Action::SaveQueryAs),
         ] {
             let mut sequence = None;
             for key in [' ', 'f'] {

@@ -561,7 +561,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let hint = if app.key_sequence == Some(' ') {
         "LEADER  r Run  f Find  ? Help"
     } else if app.key_sequence == Some('f') {
-        "LEADER f…  f Saved queries  •  h History  •  Esc Cancel"
+        "LEADER f…  f Saved queries  •  h History  •  s Save as  •  Esc Cancel"
     } else if app.key_sequence == Some('d') {
         "d…  d Delete current line  •  Esc Cancel"
     } else if app.key_sequence == Some('g') {
@@ -597,7 +597,11 @@ fn draw_save_dialog(frame: &mut Frame, app: &App) {
     let area = centered_fixed(68, 8, frame.area());
     frame.render_widget(Clear, area);
     let block = Block::default()
-        .title(" Save query ")
+        .title(if dialog.save_as {
+            " Save query as "
+        } else {
+            " Save query "
+        })
         .title_style(
             Style::default()
                 .fg(Color::Yellow)
@@ -785,6 +789,7 @@ fn draw_help(frame: &mut Frame) {
         key_line("Ctrl-s", "Save or update the current query"),
         key_line("Space f f", "Find saved queries for this database"),
         key_line("Space f h", "Search query history"),
+        key_line("Space f s", "Save current SQL as a new query"),
         key_line("? / F1", "Open or close this cheat sheet"),
         key_line("q", "Quit from NORMAL mode"),
         key_line("Ctrl-c", "Quit from anywhere"),

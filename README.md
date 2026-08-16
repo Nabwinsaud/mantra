@@ -30,6 +30,7 @@ The connection URL is used only in memory and is never displayed or logged.
 - `Ctrl-s`: save the current query; the first save asks for a name
 - `<leader>ff`: fuzzy-find saved queries for the current project and database
 - `<leader>fh`: fuzzy-find automatically recorded query history
+- `<leader>fs`: save the current SQL as a new query instead of updating the opened one
 - `o`: open a new line below and enter INSERT mode
 - `dd`: delete the current line
 - `a` / `A`: append after cursor / at line end
@@ -59,6 +60,7 @@ history are stored in PGIDE's platform-local SQLite database.
 
 - `<leader>ff` (Space, `f`, `f`): open saved queries
 - `<leader>fh` (Space, `f`, `h`): open query history
+- `<leader>fs` (Space, `f`, `s`): save as a new query
 - Type to fuzzy-filter, use `Ctrl-n` / `Ctrl-p` or arrow keys to select, then press `Enter`
 - Press `Esc` to close either finder
 

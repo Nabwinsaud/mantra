@@ -39,6 +39,7 @@ pub enum Action {
     CloseInspector,
     PreviewInspectedTable,
     SaveQuery,
+    SaveQueryAs,
     OpenSavedQueryFinder,
     OpenHistoryFinder,
     OverlayInsert(char),
