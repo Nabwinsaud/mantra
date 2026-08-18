@@ -1,6 +1,28 @@
-# PGIDE
+# Mantra
 
-A keyboard-first PostgreSQL terminal IDE, currently at its foundation milestone.
+Mantra is a keyboard-first PostgreSQL terminal IDE: navigate a database like a file tree, write SQL
+like code, and inspect results without leaving the terminal.
+
+The name is intentionally broader than a driver or a single screen. The product goal is a calm,
+repeatable PostgreSQL workflow that stays close to the keyboard while remaining usable with a
+mouse.
+
+## Why this exists
+
+I wanted a PostgreSQL workspace that matched the way I already work in a terminal: an explorer on
+the left, a real editor in the middle, and a result surface that can be searched, copied, and
+eventually edited in place. I tried established terminal clients such as [pgcli](https://github.com/dbcli/pgcli)
+and [tsql](https://github.com/fcoury/tsql). They are useful references, but my workflow needed the
+database tree, saved SQL buffers, schema-aware completion, query history, and result navigation to
+live together in one focused workspace.
+
+Mantra is being built for that use case first. It is not trying to be every database tool; it is
+trying to make PostgreSQL work from a terminal feel deliberate and dependable.
+
+## Current status
+
+Mantra is in active pre-release development. At the moment the supported installation path is from
+source with Cargo:
 
 ## Run
 
@@ -10,6 +32,9 @@ cargo run -- 'postgres://user:password@localhost/database'
 ```
 
 The connection URL is used only in memory and is never displayed or logged.
+
+Homebrew, Arch, Debian, and curl-based installation are planned for the first public release and
+are tracked in [PLAN.md](PLAN.md). There are no published packages yet.
 
 ## Initial keymap
 
