@@ -41,7 +41,7 @@ jobs:
         run: |
           set -euo pipefail
           cd packaging/arch
-          makepkg --printsrcinfo > generated.SRCINFO
+          su builder -c 'makepkg --printsrcinfo' > generated.SRCINFO
           diff --unified .SRCINFO generated.SRCINFO
           package="$(find . -maxdepth 1 -name '*.pkg.tar.zst' -print -quit)"
           test -n "$package"
