@@ -36,9 +36,18 @@ cargo run
 cargo run -- 'postgres://user:password@localhost/database'
 ```
 
+Debian and Ubuntu users can install the architecture-matched `v0.1.1` package directly:
+
+```sh
+architecture="$(dpkg --print-architecture)"
+curl -fLO "https://github.com/Nabwinsaud/mantra/releases/download/v0.1.1/mantra_0.1.1-1_${architecture}.deb"
+sudo apt install "./mantra_0.1.1-1_${architecture}.deb"
+```
+
 The connection URL is used only in memory and is never displayed or logged.
 
-Arch, Debian, and curl-based installation are planned and tracked in [PLAN.md](PLAN.md).
+The signed APT repository, Arch package, and version-independent curl installer are tracked in
+[PLAN.md](PLAN.md).
 
 ## Initial keymap
 
