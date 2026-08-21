@@ -1,0 +1,57 @@
+name: Arch package
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - packaging/arch/**
+      - Cargo.lock
+      - Cargo.toml
+      - src/**
+      - .github/workflows/arch-package.yml
+  push:
+    branches: [main]
+    paths:
+      - packaging/arch/**
+      - .github/workflows/arch-package.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    container: archlinux:base-devel
+    steps:
+      - name: Install validation tools
+        run: pacman -Syu --noconfirm git namcap rust
+
+      - uses: actions/checkout@v5
+
+      - name: Build as an unprivileged package user
+        shell: bash
+        run: |
+          set -euo pipefail
+          useradd --create-home builder
+          chown -R builder:builder "$GITHUB_WORKSPACE"
+          su builder -c 'cd packaging/arch && makepkg --noconfirm'
+
+      - name: Validate metadata and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd packaging/arch
+          makepkg --printsrcinfo > generated.SRCINFO
+          diff --unified .SRCINFO generated.SRCINFO
+          package="$(find . -maxdepth 1 -name '*.pkg.tar.zst' -print -quit)"
+          test -n "$package"
+          namcap PKGBUILD "$package"
+
+      - name: Install, run, and remove package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$(find packaging/arch -maxdepth 1 -name '*.pkg.tar.zst' -print -quit)"
+          pacman -U --noconfirm "$package"
+          test "$(mantra --version)" = "mantra 0.1.1"
+          pacman -R --noconfirm mantra

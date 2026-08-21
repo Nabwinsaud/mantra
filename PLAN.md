@@ -35,7 +35,7 @@ gates.
 - [ ] Build signed/checksummed macOS and Linux release artifacts from SemVer tags
 - [ ] Publish a release manifest and provenance with each tagged GitHub Release
 - [ ] Publish and automatically synchronize a Homebrew tap (`brew install mantra`)
-- [ ] Publish and synchronize an AUR `mantra-bin` recipe with a protected approval gate
+- [ ] Publish and synchronize an AUR package with a protected approval gate (validated `PKGBUILD` added)
 - [x] Publish automatically validated `amd64` and `arm64` Debian packages (`.deb`)
 - [ ] Publish and atomically synchronize a signed APT repository and keyring package
 - [ ] Add a checksum-verifying curl installer for macOS and Linux

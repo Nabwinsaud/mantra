@@ -84,3 +84,27 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "$RELEASE_TAG" target/debian/*.deb --clobber
+
+  checksums:
+    name: Publish Debian checksums
+    needs: build
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_TAG: ${{ inputs.tag || github.event.release.tag_name }}
+    steps:
+      - name: Download published packages
+        run: |
+          mkdir -p dist
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern "mantra_*.deb" \
+            --dir dist
+
+      - name: Generate and publish checksums
+        run: |
+          cd dist
+          sha256sum *.deb > SHA256SUMS
+          gh release upload "$RELEASE_TAG" SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber

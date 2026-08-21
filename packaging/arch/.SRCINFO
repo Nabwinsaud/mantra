@@ -1,0 +1,16 @@
+pkgbase = mantra
+	pkgdesc = Keyboard-first PostgreSQL terminal IDE
+	pkgver = 0.1.1
+	pkgrel = 1
+	url = https://github.com/Nabwinsaud/mantra
+	arch = x86_64
+	license = MIT
+	makedepends = cargo
+	makedepends = rust
+	depends = gcc-libs
+	depends = glibc
+	depends = sqlite
+	source = mantra-0.1.1.tar.gz::https://github.com/Nabwinsaud/mantra/archive/refs/tags/v0.1.1.tar.gz
+	sha256sums = c3a9ca7ca3291492ee559e6447a9ed55e98af3525c877b3b8223bb5434dd51c2
+
+pkgname = mantra
