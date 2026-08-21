@@ -19,35 +19,34 @@ live together in one focused workspace.
 Mantra is being built for that use case first. It is not trying to be every database tool; it is
 trying to make PostgreSQL work from a terminal feel deliberate and dependable.
 
-## Current status
+## Installation
 
-Mantra is in active pre-release development. Install the current release with Homebrew:
+Mantra is in active pre-release development. Install the latest release with Homebrew:
 
 ```sh
 brew install Nabwinsaud/tap/mantra
 ```
 
-The formula works on macOS and Linux through Homebrew. To run from a source checkout instead:
+The formula works on macOS and Linux. Debian and Ubuntu users can instead use the signed APT
+repository, and a checksum-verifying installer is available for macOS, Debian, and Ubuntu:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Nabwinsaud/mantra-packages/main/install.sh | sh
+```
+
+See [Mantra Packages](https://github.com/Nabwinsaud/mantra-packages) for signed APT setup,
+repository keys, supported architectures, and packaging details.
 
 ## Run
+
+To run from a source checkout:
 
 ```sh
 cargo run
 cargo run -- 'postgres://user:password@localhost/database'
 ```
 
-Debian and Ubuntu users can install the architecture-matched `v0.1.1` package directly:
-
-```sh
-architecture="$(dpkg --print-architecture)"
-curl -fLO "https://github.com/Nabwinsaud/mantra/releases/download/v0.1.1/mantra_0.1.1-1_${architecture}.deb"
-sudo apt install "./mantra_0.1.1-1_${architecture}.deb"
-```
-
 The connection URL is used only in memory and is never displayed or logged.
-
-The signed APT repository, Arch package, and version-independent curl installer are tracked in
-[PLAN.md](PLAN.md).
 
 ## Initial keymap
 
