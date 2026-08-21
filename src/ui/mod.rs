@@ -83,7 +83,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![Span::styled(
-            " PGIDE",
+            " MANTRA",
             Style::default().add_modifier(Modifier::BOLD),
         )]))
         .block(Block::default().borders(Borders::ALL)),
@@ -104,6 +104,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_results(frame, content[1], app);
     draw_status(frame, outer[2], app);
     draw_completion(frame, top[1], app);
+    draw_which_key(frame, app);
     if app.finder.is_some() {
         draw_finder(frame, app);
     }
@@ -201,10 +202,40 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(Line::from(tabs)), tabs_area);
-    frame.render_widget(
-        Paragraph::new(crate::sql::highlight::lines(&app.query)),
-        sql_area,
-    );
+    let highlighted = crate::sql::highlight::lines(&app.query);
+    let line_count = highlighted.len().max(1);
+    let gutter_width = line_count.to_string().len().max(2);
+    let visible_height = sql_area.height.max(1) as usize;
+    let scroll = cursor_line
+        .saturating_sub(visible_height)
+        .min(line_count.saturating_sub(visible_height));
+    let visible = highlighted
+        .into_iter()
+        .enumerate()
+        .skip(scroll)
+        .take(visible_height)
+        .map(|(index, line)| {
+            let is_cursor_line = index + 1 == cursor_line;
+            let number_style = if is_cursor_line {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            let mut spans = vec![
+                Span::styled(format!("{:>gutter_width$} ", index + 1), number_style),
+                Span::styled("│ ", Style::default().fg(Color::DarkGray)),
+            ];
+            spans.extend(line.spans);
+            Line::from(spans).style(if is_cursor_line {
+                Style::default().bg(Color::Rgb(31, 34, 46))
+            } else {
+                Style::default()
+            })
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(Paragraph::new(visible), sql_area);
     if app.focus == Focus::Editor && !app.help_visible && !app.overlay_active() {
         let prefix = &app.query[..app.cursor];
         let row = prefix
@@ -219,11 +250,12 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &App) {
             .count() as u16;
         let x = sql_area
             .x
+            .saturating_add(gutter_width as u16 + 3)
             .saturating_add(column)
             .min(sql_area.right().saturating_sub(1));
         let y = sql_area
             .y
-            .saturating_add(row)
+            .saturating_add(row.saturating_sub(scroll as u16))
             .min(sql_area.bottom().saturating_sub(1));
         frame.set_cursor_position((x, y));
     }
@@ -640,16 +672,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
             )
         })
         .unwrap_or_default();
-    let hint = if app.key_sequence == Some(' ') {
-        "LEADER  n New query  •  r Run  •  f Find  •  ? Help"
-    } else if app.key_sequence == Some('f') {
-        "LEADER f…  f Saved queries  •  h History  •  s Save as  •  Esc Cancel"
-    } else if app.key_sequence == Some('b') {
-        "LEADER b…  d Close current query tab  •  Esc Cancel"
-    } else if app.key_sequence == Some('d') {
-        "d…  d Delete current line  •  Esc Cancel"
-    } else if app.key_sequence == Some('g') {
-        "g…  g First line  •  t Next tab  •  T Previous tab  •  Esc Cancel"
+    let hint = if app.key_sequence.is_some() {
+        "which-key  •  Esc cancel"
     } else if app.mode == Mode::Insert {
         "Esc Normal  •  type to edit"
     } else {
@@ -659,17 +683,97 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         .status_message
         .as_deref()
         .map_or_else(String::new, |message| format!(" │ {message}"));
-    let left = format!(
-        " {} │ {}{}{}",
-        app.mode.label(),
-        connection,
-        details,
-        message
-    );
-    let gap = (area.width as usize).saturating_sub(left.chars().count() + hint.chars().count() + 1);
+    let mode = format!(" {} ", app.mode.label());
+    let left = format!(" {connection}{details}{message}");
+    let gap = (area.width as usize)
+        .saturating_sub(mode.chars().count() + left.chars().count() + hint.chars().count() + 1);
     frame.render_widget(
-        Paragraph::new(format!("{left}{}{hint} ", " ".repeat(gap)))
-            .style(Style::default().fg(Color::Black).bg(Color::Cyan)),
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                mode,
+                Style::default()
+                    .fg(Color::Black)
+                    .bg(if app.mode == Mode::Insert {
+                        Color::Green
+                    } else {
+                        Color::LightBlue
+                    })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("{left}{}{hint} ", " ".repeat(gap)),
+                Style::default().fg(Color::Gray).bg(Color::Rgb(35, 38, 52)),
+            ),
+        ])),
+        area,
+    );
+}
+
+fn draw_which_key(frame: &mut Frame, app: &App) {
+    if app.help_visible || app.overlay_active() {
+        return;
+    }
+    let Some(sequence) = app.key_sequence else {
+        return;
+    };
+    let (title, bindings): (&str, &[(&str, &str)]) = match sequence {
+        ' ' => (
+            " Leader ",
+            &[
+                ("n", "new query"),
+                ("r", "run statement"),
+                ("f", "+find"),
+                ("b", "+buffer"),
+                ("?", "help"),
+            ],
+        ),
+        'f' => (
+            " Leader › find ",
+            &[("f", "saved queries"), ("h", "history"), ("s", "save as")],
+        ),
+        'b' => (" Leader › buffer ", &[("d", "close query tab")]),
+        'd' => (" Delete ", &[("d", "delete line")]),
+        'g' => (
+            " Go to ",
+            &[
+                ("g", "first line"),
+                ("t", "next tab"),
+                ("T", "previous tab"),
+            ],
+        ),
+        _ => return,
+    };
+    let height = bindings.len() as u16 + 2;
+    let frame_area = frame.area();
+    let width = 46.min(frame_area.width);
+    let area = Rect::new(
+        frame_area.x + frame_area.width.saturating_sub(width) / 2,
+        frame_area.bottom().saturating_sub(height + 1),
+        width,
+        height.min(frame_area.height.saturating_sub(1)),
+    );
+    frame.render_widget(Clear, area);
+    let lines = bindings
+        .iter()
+        .map(|(key, description)| {
+            Line::from(vec![
+                Span::styled(
+                    format!(" {key:<4}"),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(*description, Style::default().fg(Color::Gray)),
+            ])
+        })
+        .collect::<Vec<_>>();
+    frame.render_widget(
+        Paragraph::new(lines).block(
+            Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::LightBlue)),
+        ),
         area,
     );
 }
@@ -710,7 +814,7 @@ fn draw_save_dialog(frame: &mut Frame, app: &App) {
         rows[0],
     );
     frame.render_widget(
-        Paragraph::new("Stored for this database and mirrored to .pgide/queries/")
+        Paragraph::new("Stored for this database and mirrored to the project queries directory")
             .style(Style::default().fg(Color::DarkGray)),
         rows[1],
     );
@@ -938,7 +1042,7 @@ fn draw_help(frame: &mut Frame) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ),
-        Line::from("PGIDE has NORMAL and INSERT modes, like Neovim."),
+        Line::from("Mantra has NORMAL and INSERT modes, like Neovim."),
         Line::from(""),
         key_line("i", "Enter INSERT mode and edit SQL"),
         key_line("Esc", "Return to NORMAL mode / close this window"),
@@ -1012,7 +1116,7 @@ fn draw_help(frame: &mut Frame) {
     frame.render_widget(
         Paragraph::new(help).wrap(Wrap { trim: false }).block(
             Block::default()
-                .title(" PGIDE CHEAT SHEET ")
+                .title(" MANTRA CHEAT SHEET ")
                 .title_style(
                     Style::default()
                         .fg(Color::Yellow)

@@ -21,8 +21,13 @@ trying to make PostgreSQL work from a terminal feel deliberate and dependable.
 
 ## Current status
 
-Mantra is in active pre-release development. At the moment the supported installation path is from
-source with Cargo:
+Mantra is in active pre-release development. Install the current release with Homebrew:
+
+```sh
+brew install Nabwinsaud/tap/mantra
+```
+
+The formula works on macOS and Linux through Homebrew. To run from a source checkout instead:
 
 ## Run
 
@@ -33,14 +38,14 @@ cargo run -- 'postgres://user:password@localhost/database'
 
 The connection URL is used only in memory and is never displayed or logged.
 
-Homebrew, Arch, Debian, and curl-based installation are planned for the first public release and
-are tracked in [PLAN.md](PLAN.md). There are no published packages yet.
+Arch, Debian, and curl-based installation are planned and tracked in [PLAN.md](PLAN.md).
 
 ## Initial keymap
 
 - `i`: enter insert mode
 - `Esc`: return to normal mode
 - `<leader>r` (Space, then `r`): execute the SQL buffer
+- `Space`: open a LazyVim-style which-key panel for available leader commands
 - `?` or `F1`: open the in-app cheat sheet
 - `Tab` / `Shift-Tab`: cycle Explorer, SQL, and Results
 - `Ctrl-h/j/k/l`: focus left/down/up/right panel
@@ -79,12 +84,17 @@ connected database, ranked with Nucleo's fuzzy matcher. SQL aliases are scoped t
 table, so `FROM user_roles ur ... ur.` completes as `ur."userId"`, not an unrelated table's
 column. Mixed-case PostgreSQL identifiers are quoted automatically to prevent case folding.
 
+The editor includes a line-number gutter, current-line highlighting, cursor-following vertical
+scrolling, mode-colored statusline, and contextual which-key panels for leader and multi-key
+commands.
+
 ## Saved queries and history
 
 Press `Ctrl-s` to name and save the current SQL buffer. Later `Ctrl-s` updates the same saved
-query. Saved queries are scoped to both the directory where PGIDE was started and the connected
+query. Saved queries are scoped to both the directory where Mantra was started and the connected
 database. A portable SQL copy is written to `.pgide/queries/`, while searchable metadata and query
-history are stored in PGIDE's platform-local SQLite database.
+history are stored in Mantra's platform-local SQLite database. The `.pgide` path is retained for
+compatibility with workspaces created before the product was renamed to Mantra.
 
 - `<leader>ff` (Space, `f`, `f`): open saved queries
 - `<leader>fh` (Space, `f`, `h`): open query history
@@ -99,10 +109,10 @@ Saved queries open as file-backed editor tabs. Opening the same saved query agai
 existing tab, and `Ctrl-s` updates that file without asking for its name again. A `●` beside a tab
 means its buffer has changes that have not been saved. Open saved tabs and the active tab are
 restored the next time the same project and database are opened; click a tab or use `gt` / `gT` to
-switch between them. If an older workspace has saved queries but no tab session yet, PGIDE opens
+switch between them. If an older workspace has saved queries but no tab session yet, Mantra opens
 the most recently saved query automatically.
 
-`<leader>bd` (Space, `b`, `d`) closes only the editor tab. PGIDE always asks first, including for
+`<leader>bd` (Space, `b`, `d`) closes only the editor tab. Mantra always asks first, including for
 unnamed scratch buffers. Press `y` or click **Close tab** to confirm; press `n`, `Esc`, or click
 **Cancel** to keep it open. Saved-query records and `.sql` files are never deleted by this action.
 

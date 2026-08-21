@@ -927,6 +927,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "mantra"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "crossterm",
+ "dirs",
+ "futures-util",
+ "nucleo-matcher",
+ "ratatui",
+ "rusqlite",
+ "serde_json",
+ "sqlparser",
+ "tokio",
+ "tokio-postgres",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1211,27 +1232,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85abd351c0de1e8384fc791a0737111a350394937e92b956b743dac12429f57c"
 dependencies = [
  "pest",
-]
-
-[[package]]
-name = "pgide"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "crossterm",
- "dirs",
- "futures-util",
- "nucleo-matcher",
- "ratatui",
- "rusqlite",
- "serde_json",
- "sqlparser",
- "tokio",
- "tokio-postgres",
- "tracing",
- "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]

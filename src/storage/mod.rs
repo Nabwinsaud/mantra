@@ -36,11 +36,11 @@ impl Storage {
         let data_dir = dirs::data_local_dir()
             .unwrap_or_else(|| project_root.join(".pgide"))
             .join("pgide");
-        fs::create_dir_all(&data_dir).context("create PGIDE data directory")?;
+        fs::create_dir_all(&data_dir).context("create Mantra data directory")?;
         let queries_dir = project_root.join(".pgide").join("queries");
         fs::create_dir_all(&queries_dir).context("create project query directory")?;
         Self::from_connection(
-            Connection::open(data_dir.join("pgide.sqlite")).context("open PGIDE storage")?,
+            Connection::open(data_dir.join("pgide.sqlite")).context("open Mantra storage")?,
             queries_dir,
             project_root.to_string_lossy().into_owned(),
         )

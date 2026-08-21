@@ -27,15 +27,22 @@ already exists; unchecked items are deliberately still work.
 
 The only supported installation path today is `cargo run` from a checkout. Packaging is pending:
 
-- [ ] Publish a tagged release on GitHub
-- [ ] Publish a Homebrew formula (`brew install mantra`)
-- [ ] Publish an Arch package / AUR recipe
-- [ ] Publish Debian packages (`.deb`) for supported architectures
-- [ ] Publish release binaries and a checksum file
-- [ ] Add a curl installer for macOS and Linux
+The channels will be delivered incrementally but synchronized by one tagged-release pipeline. See
+[RELEASING.md](RELEASING.md) for the artifact contract, registry rules, rollout phases, and release
+gates.
+
+- [ ] Add CI gates for format, Clippy, tests, terminal smoke tests, and package metadata
+- [ ] Build signed/checksummed macOS and Linux release artifacts from SemVer tags
+- [ ] Publish a release manifest and provenance with each tagged GitHub Release
+- [ ] Publish and automatically synchronize a Homebrew tap (`brew install mantra`)
+- [ ] Publish and synchronize an AUR `mantra-bin` recipe with a protected approval gate
+- [ ] Publish `amd64` and `arm64` Debian packages (`.deb`)
+- [ ] Publish and atomically synchronize a signed APT repository and keyring package
+- [ ] Add a checksum-verifying curl installer for macOS and Linux
+- [ ] Add post-release install, upgrade, uninstall, retry, and cross-channel drift tests
 - [ ] Add shell completions and a `mantra(1)` manual page
 - [ ] Document upgrades, uninstall, configuration paths, and credential safety
-- [ ] Keep package metadata, binary name, README, and screenshots consistent with **Mantra**
+- [x] Keep package metadata, binary name, README, and screenshots consistent with **Mantra**
 
 ## Result editing plan
 

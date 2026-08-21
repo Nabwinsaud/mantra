@@ -1,10 +1,15 @@
 [package]
-name = "pgide"
+name = "mantra"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 description = "A keyboard-first PostgreSQL terminal IDE"
 license = "MIT"
+homepage = "https://github.com/Nabwinsaud/mantra"
+repository = "https://github.com/Nabwinsaud/mantra"
+readme = "README.md"
+keywords = ["postgresql", "sql", "terminal", "tui"]
+categories = ["command-line-utilities", "database"]
 
 [dependencies]
 anyhow = "1"

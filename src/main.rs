@@ -17,6 +17,9 @@ use futures_util::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    if handle_info_flag(env::args().nth(1).as_deref()) {
+        return Ok(());
+    }
     init_tracing();
     let connection_url = env::args().nth(1);
     let mut terminal = terminal::TerminalGuard::new(io::stdout())?;
@@ -77,6 +80,24 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+fn handle_info_flag(argument: Option<&str>) -> bool {
+    match argument {
+        Some("-V" | "--version") => {
+            println!("mantra {}", env!("CARGO_PKG_VERSION"));
+            true
+        }
+        Some("-h" | "--help") => {
+            println!(
+                "Mantra — a keyboard-first PostgreSQL terminal IDE\n\n\
+                 Usage: mantra [POSTGRES_URL]\n\n\
+                 Options:\n  -h, --help     Print help\n  -V, --version  Print version"
+            );
+            true
+        }
+        _ => false,
+    }
+}
+
 fn init_tracing() {
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"));
@@ -84,4 +105,17 @@ fn init_tracing() {
         .with_env_filter(filter)
         .with_writer(io::stderr)
         .init();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn recognizes_non_interactive_info_flags() {
+        assert!(handle_info_flag(Some("--version")));
+        assert!(handle_info_flag(Some("-h")));
+        assert!(!handle_info_flag(Some("postgres://localhost/mantra")));
+        assert!(!handle_info_flag(None));
+    }
 }
