@@ -105,6 +105,9 @@ The repository layout and signatures should follow Debian's
 [repository format](https://wiki.debian.org/DebianRepository/Format) and
 [reprepro setup guidance](https://wiki.debian.org/DebianRepository/SetupWithReprepro).
 
+The implemented package workflow and remaining signing/hosting boundary are documented in
+[`packaging/apt/README.md`](packaging/apt/README.md).
+
 ### Curl installer
 
 Host a small, versioned shell script at `install.mantra.dev`. The script must use HTTPS, reject

@@ -1,8 +1,9 @@
 [package]
 name = "mantra"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 rust-version = "1.88"
+authors = ["Nabwin Saud"]
 description = "A keyboard-first PostgreSQL terminal IDE"
 license = "MIT"
 homepage = "https://github.com/Nabwinsaud/mantra"
@@ -31,3 +32,17 @@ uuid = { version = "1", features = ["v4"] }
 [profile.release]
 lto = "thin"
 strip = true
+
+[package.metadata.deb]
+maintainer = "Nabwin Saud"
+copyright = "2026, Nabwin Saud"
+license-file = ["LICENSE", "0"]
+section = "database"
+priority = "optional"
+depends = "$auto"
+extended-description = "Mantra is a keyboard-first PostgreSQL terminal IDE with a database explorer, modal SQL editor, schema-aware completion, query history, and result navigation."
+assets = [
+    ["target/release/mantra", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/mantra/README.md", "644"],
+    ["LICENSE", "usr/share/doc/mantra/copyright", "644"],
+]
