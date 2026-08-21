@@ -68,7 +68,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          package="$(find target/debian -maxdepth 1 -name '*.deb' -print -quit)"
+          package="$(find "$PWD/target/debian" -maxdepth 1 -name '*.deb' -print -quit)"
           sudo apt-get install --yes "$package"
           test "$(mantra --version)" = "mantra ${RELEASE_TAG#v}"
           sudo apt-get remove --yes mantra
