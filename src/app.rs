@@ -379,6 +379,7 @@ impl App {
             Action::Redo => self.redo(),
             Action::YankResultCell => self.yank_result_cell(),
             Action::YankResultRow => self.yank_result_row(),
+            Action::YankTableAiPrompt => self.yank_table_ai_prompt(),
             Action::EditResultCell => match self.update_sql_for_selected_cell() {
                 Ok(sql) => {
                     self.open_scratch_tab(sql);
@@ -1523,6 +1524,11 @@ impl App {
     }
 
     fn yank_result_cell(&mut self) {
+        if self.inspector.is_some() {
+            self.status_message =
+                Some("Table Inspector: press yy for schema or ya for AI prompt".into());
+            return;
+        }
         let Some(value) = self
             .result
             .as_ref()
@@ -1537,6 +1543,14 @@ impl App {
     }
 
     fn yank_result_row(&mut self) {
+        if let Some(details) = &self.inspector {
+            let value = table_markdown(details);
+            self.finish_yank(
+                &value,
+                &format!("{}.{} schema", details.schema, details.name),
+            );
+            return;
+        }
         let Some(row) = self
             .result
             .as_ref()
@@ -1549,6 +1563,18 @@ impl App {
         self.finish_yank(&value, "row as TSV");
     }
 
+    fn yank_table_ai_prompt(&mut self) {
+        let Some(details) = &self.inspector else {
+            self.status_message = Some("Open a table in Table Inspector before using ya".into());
+            return;
+        };
+        let value = table_ai_prompt(details);
+        self.finish_yank(
+            &value,
+            &format!("{}.{} AI schema prompt", details.schema, details.name),
+        );
+    }
+
     fn finish_yank(&mut self, value: &str, description: &str) {
         match copy_to_clipboard(value) {
             Ok(()) => self.status_message = Some(format!("Copied {description}")),
@@ -1557,6 +1583,78 @@ impl App {
             }
         }
     }
+}
+
+fn table_markdown(details: &TableDetails) -> String {
+    let mut output = format!(
+        "# PostgreSQL table: {}.{}\n\n## Columns\n\n| Column | Type | Nullable | Default | Key | Comment |\n|---|---|---|---|---|---|\n",
+        details.schema, details.name
+    );
+    for column in &details.columns {
+        let data_type = if column.enum_values.is_empty() {
+            column.data_type.clone()
+        } else {
+            format!(
+                "{} (enum: {})",
+                column.data_type,
+                column.enum_values.join(", ")
+            )
+        };
+        output.push_str(&format!(
+            "| {} | {} | {} | {} | {} | {} |\n",
+            markdown_cell(&column.name),
+            markdown_cell(&data_type),
+            if column.nullable { "yes" } else { "no" },
+            markdown_cell(column.default.as_deref().unwrap_or("—")),
+            markdown_cell(column.key.as_deref().unwrap_or("—")),
+            markdown_cell(column.comment.as_deref().unwrap_or("—")),
+        ));
+    }
+
+    output.push_str("\n## Constraints\n\n");
+    if details.constraints.is_empty() {
+        output.push_str("- None\n");
+    } else {
+        for constraint in &details.constraints {
+            output.push_str(&format!(
+                "- **{}** `{}`: `{}`\n",
+                constraint.kind,
+                constraint.name.replace('`', "\\`"),
+                constraint.definition.replace('`', "\\`")
+            ));
+        }
+    }
+
+    output.push_str("\n## Indexes\n\n");
+    if details.indexes.is_empty() {
+        output.push_str("- None\n");
+    } else {
+        for index in &details.indexes {
+            output.push_str(&format!(
+                "- `{}`: `{}`\n",
+                index.name.replace('`', "\\`"),
+                index.definition.replace('`', "\\`")
+            ));
+        }
+    }
+    output
+}
+
+fn table_ai_prompt(details: &TableDetails) -> String {
+    let mut value = table_markdown(details);
+    value.push_str(
+        "\n## Request\n\nGenerate 20 realistic sample rows for this PostgreSQL table.\n\n\
+         Requirements:\n\
+         - Respect primary keys, foreign keys, unique constraints, checks, nullability, and enum values.\n\
+         - Omit identity and generated columns when PostgreSQL supplies their values.\n\
+         - Use PostgreSQL-compatible literals.\n\
+         - Return executable INSERT statements only.\n",
+    );
+    value
+}
+
+fn markdown_cell(value: &str) -> String {
+    value.replace('|', "\\|").replace(['\r', '\n'], "<br>")
 }
 
 fn primary_key_predicate(
@@ -1769,6 +1867,47 @@ mod tests {
             elapsed: Duration::from_millis(1),
             sources: vec![None, Some(source)],
         }
+    }
+
+    #[test]
+    fn table_schema_markdown_includes_types_enums_constraints_and_indexes() {
+        let details = TableDetails {
+            schema: "public".into(),
+            name: "messages".into(),
+            columns: vec![crate::database::TableColumn {
+                name: "role".into(),
+                data_type: "message_role".into(),
+                nullable: false,
+                default: Some("'user'::message_role".into()),
+                key: None,
+                comment: Some("Who | authored the message".into()),
+                enum_values: vec!["user".into(), "assistant".into()],
+            }],
+            constraints: vec![crate::database::TableConstraint {
+                name: "messages_role_check".into(),
+                kind: "CHECK".into(),
+                definition: "CHECK (role IS NOT NULL)".into(),
+            }],
+            indexes: vec![crate::database::TableIndex {
+                name: "messages_pkey".into(),
+                definition: "CREATE UNIQUE INDEX messages_pkey ON public.messages (id)".into(),
+            }],
+            estimated_rows: 4,
+            table_size: "16 kB".into(),
+            indexes_size: "16 kB".into(),
+            total_size: "32 kB".into(),
+        };
+
+        let markdown = table_markdown(&details);
+
+        assert!(markdown.contains("# PostgreSQL table: public.messages"));
+        assert!(markdown.contains("message_role (enum: user, assistant)"));
+        assert!(markdown.contains("Who \\| authored the message"));
+        assert!(markdown.contains("messages_role_check"));
+        assert!(markdown.contains("messages_pkey"));
+        let prompt = table_ai_prompt(&details);
+        assert!(prompt.contains("Generate 20 realistic sample rows"));
+        assert!(prompt.contains("Return executable INSERT statements only"));
     }
 
     #[tokio::test]

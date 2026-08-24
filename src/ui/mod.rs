@@ -462,8 +462,10 @@ fn draw_table_inspector(frame: &mut Frame, area: Rect, app: &App) {
             .collect::<Vec<_>>(),
     );
     frame.render_widget(
-        Paragraph::new(tab_line)
-            .block(Block::default().title(" [ / ] switch · Esc close · p preview ")),
+        Paragraph::new(tab_line).block(
+            Block::default()
+                .title(" [ / ] switch · Esc close · p preview · yy schema · ya AI prompt "),
+        ),
         sections[0],
     );
 
@@ -692,6 +694,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         .unwrap_or_default();
     let hint = if app.key_sequence.is_some() {
         "which-key  •  Esc cancel"
+    } else if app.inspector.is_some() && app.focus == Focus::Results {
+        "[/] Sections  •  p Preview  •  yy Schema  •  ya AI prompt"
     } else if app.focus == Focus::Results {
         "h/j/k/l Navigate  •  y/yy Copy  •  e Edit SQL  •  dd Delete SQL"
     } else if app.mode == Mode::Insert {
@@ -767,6 +771,13 @@ fn draw_which_key(frame: &mut Frame, app: &App) {
         ),
         'd' if app.focus == Focus::Results => (" Delete result ", &[("d", "delete row safely")]),
         'd' => (" Delete ", &[("d", "delete line")]),
+        'y' if app.inspector.is_some() => (
+            " Yank table ",
+            &[
+                ("y", "copy schema as Markdown"),
+                ("a", "copy schema + AI sample prompt"),
+            ],
+        ),
         'y' => (" Yank result ", &[("y", "copy row as TSV")]),
         'g' => (
             " Go to ",

@@ -88,6 +88,7 @@ pub fn map_key_event(
         if let Some(pending) = sequence.take() {
             match (pending, key.code) {
                 ('y', KeyCode::Char('y')) => return Some(Action::YankResultRow),
+                ('y', KeyCode::Char('a')) => return Some(Action::YankTableAiPrompt),
                 ('d', KeyCode::Char('d')) => return Some(Action::RequestDeleteResultRow),
                 _ => {}
             }
@@ -418,6 +419,30 @@ mod tests {
                 false,
             ),
             Some(Action::EditResultCell)
+        );
+
+        let mut sequence = None;
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Results,
+                false,
+                false,
+            ),
+            Some(Action::YankResultCell)
+        );
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('a'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Results,
+                false,
+                false,
+            ),
+            Some(Action::YankTableAiPrompt)
         );
     }
 

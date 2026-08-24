@@ -61,6 +61,8 @@ turning a table view into an unreviewable mutation tool.
 
 - [x] `y` yank the selected cell
 - [x] `yy` yank the selected row as TSV
+- [x] `yy` in Table Inspector yank AI/human-readable Markdown schema context
+- [x] `ya` in Table Inspector yank schema context with a sample-data prompt
 - [ ] `yc` yank the selected column
 - [ ] `ya` yank all visible rows
 - [ ] Choose plain text, TSV, CSV, JSON, Markdown, or SQL `INSERT` output

@@ -65,6 +65,7 @@ pub struct TableColumn {
     pub default: Option<String>,
     pub key: Option<String>,
     pub comment: Option<String>,
+    pub enum_values: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -650,7 +651,13 @@ async fn inspect_table(
                 WHERE c.conrelid = cls.oid AND a.attnum = ANY(c.conkey)
                   AND c.contype IN ('p', 'u', 'f')
             ),
-            col_description(cls.oid, a.attnum)
+            col_description(cls.oid, a.attnum),
+            ARRAY(
+                SELECT enum.enumlabel
+                FROM pg_enum enum
+                WHERE enum.enumtypid = a.atttypid
+                ORDER BY enum.enumsortorder
+            )
         FROM pg_attribute a
         JOIN pg_class cls ON cls.oid = a.attrelid
         JOIN pg_namespace n ON n.oid = cls.relnamespace
@@ -670,6 +677,7 @@ async fn inspect_table(
             default: row.get(3),
             key: row.get(4),
             comment: row.get(5),
+            enum_values: row.get(6),
         })
         .collect();
 

@@ -33,6 +33,7 @@ pub enum Action {
     Redo,
     YankResultCell,
     YankResultRow,
+    YankTableAiPrompt,
     EditResultCell,
     RequestDeleteResultRow,
     MoveLineStart,
