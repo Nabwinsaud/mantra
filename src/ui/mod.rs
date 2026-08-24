@@ -674,10 +674,12 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         .unwrap_or_default();
     let hint = if app.key_sequence.is_some() {
         "which-key  •  Esc cancel"
+    } else if app.focus == Focus::Results {
+        "h/j/k/l Navigate  •  y Cell  •  yy Row  •  dd Delete"
     } else if app.mode == Mode::Insert {
         "Esc Normal  •  type to edit"
     } else {
-        "1 Explorer  2 SQL  3 Results  •  Ctrl-n New  •  Ctrl-s Save  •  Space ff/fh Find"
+        "1 Explorer  2 SQL  3 Results  •  u Undo  •  Ctrl-r Redo  •  Space ff/fh Find"
     };
     let message = app
         .status_message
@@ -732,7 +734,9 @@ fn draw_which_key(frame: &mut Frame, app: &App) {
             &[("f", "saved queries"), ("h", "history"), ("s", "save as")],
         ),
         'b' => (" Leader › buffer ", &[("d", "close query tab")]),
+        'd' if app.focus == Focus::Results => (" Delete result ", &[("d", "delete row safely")]),
         'd' => (" Delete ", &[("d", "delete line")]),
+        'y' => (" Yank result ", &[("y", "copy row as TSV")]),
         'g' => (
             " Go to ",
             &[

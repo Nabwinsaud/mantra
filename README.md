@@ -61,6 +61,8 @@ The connection URL is used only in memory and is never displayed or logged.
 - `Enter`: expand or collapse the focused Explorer node
 - Mouse click: focus panels and toggle Explorer nodes
 - `h/j/k/l`: navigate result cells when Results is active
+- `y` / `yy` in Results: copy the selected cell / selected row as TSV
+- `dd` in Results: request safe row deletion (currently blocked until primary-key confirmation is available)
 - `Tab` in INSERT mode: accept the highlighted SQL completion
 - `Ctrl-n` / `Ctrl-p`: select the next / previous completion
 - `Enter` in INSERT mode: accept completion, or insert a newline when none is shown
@@ -73,6 +75,7 @@ The connection URL is used only in memory and is never displayed or logged.
 - `<leader>fs`: save the current SQL as a new query instead of updating the opened one
 - `gt` / `gT`: move to the next / previous SQL buffer tab
 - `o`: open a new line below and enter INSERT mode
+- `u` / `Ctrl-r` in the NORMAL SQL editor: undo / redo changes in the current buffer
 - `dd`: delete the current line
 - `a` / `A`: append after cursor / at line end
 - `I`: insert at the first non-blank character

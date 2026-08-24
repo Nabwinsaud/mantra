@@ -59,8 +59,8 @@ turning a table view into an unreviewable mutation tool.
 
 ### Copy and yank
 
-- [ ] `y` yank the selected cell
-- [ ] `yy` yank the selected row
+- [x] `y` yank the selected cell
+- [x] `yy` yank the selected row as TSV
 - [ ] `yc` yank the selected column
 - [ ] `ya` yank all visible rows
 - [ ] Choose plain text, TSV, CSV, JSON, Markdown, or SQL `INSERT` output
@@ -96,7 +96,8 @@ turning a table view into an unreviewable mutation tool.
 - [ ] Make tmux pane-navigation conflicts discoverable in the help screen
 - [ ] Improve completion ranking, alias scope, function signatures, and JOIN suggestions
 - [ ] Add formatting and diagnostics as opt-in editor commands
-- [ ] Add search/replace, undo history, and multiple selections incrementally
+- [x] Add per-buffer undo/redo history (`u` / `Ctrl-r`)
+- [ ] Add search/replace and multiple selections incrementally
 - [ ] Improve wide-result rendering with column pinning and horizontal scroll indicators
 - [ ] Add CSV, JSON, Markdown, and SQL export commands
 - [ ] Add EXPLAIN/EXPLAIN ANALYZE plan viewing

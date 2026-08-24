@@ -422,54 +422,6 @@ fn safe_error(error: &tokio_postgres::Error) -> String {
     )
 }
 
-#[cfg(test)]
-mod tests {
-    use super::decode_numeric;
-
-    fn numeric(weight: i16, sign: u16, scale: u16, digits: &[u16]) -> Vec<u8> {
-        let mut raw = Vec::with_capacity(8 + digits.len() * 2);
-        raw.extend_from_slice(&(digits.len() as u16).to_be_bytes());
-        raw.extend_from_slice(&weight.to_be_bytes());
-        raw.extend_from_slice(&sign.to_be_bytes());
-        raw.extend_from_slice(&scale.to_be_bytes());
-        for digit in digits {
-            raw.extend_from_slice(&digit.to_be_bytes());
-        }
-        raw
-    }
-
-    #[test]
-    fn decodes_postgres_numeric_wire_values() {
-        assert_eq!(
-            decode_numeric(&numeric(-1, 0, 4, &[842])),
-            Some("0.0842".into())
-        );
-        assert_eq!(
-            decode_numeric(&numeric(0, 0, 2, &[184, 2_000])),
-            Some("184.20".into())
-        );
-        assert_eq!(
-            decode_numeric(&numeric(1, 0, 3, &[12, 3456, 7_000])),
-            Some("123456.700".into())
-        );
-        assert_eq!(
-            decode_numeric(&numeric(0, 0x4000, 2, &[42, 5_000])),
-            Some("-42.50".into())
-        );
-        assert_eq!(decode_numeric(&numeric(0, 0, 2, &[])), Some("0.00".into()));
-        assert_eq!(
-            decode_numeric(&numeric(0, 0xC000, 0, &[])),
-            Some("NaN".into())
-        );
-    }
-
-    #[test]
-    fn rejects_malformed_postgres_numeric_values() {
-        assert_eq!(decode_numeric(&[]), None);
-        assert_eq!(decode_numeric(&numeric(0, 0, 0, &[10_000])), None);
-    }
-}
-
 async fn load_completion_items(client: &Client) -> (Vec<String>, Vec<String>) {
     let sql = "
         SELECT table_schema, table_name, column_name
@@ -660,4 +612,52 @@ async fn inspect_table(
         indexes_size: stats.get(2),
         total_size: stats.get(3),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_numeric;
+
+    fn numeric(weight: i16, sign: u16, scale: u16, digits: &[u16]) -> Vec<u8> {
+        let mut raw = Vec::with_capacity(8 + digits.len() * 2);
+        raw.extend_from_slice(&(digits.len() as u16).to_be_bytes());
+        raw.extend_from_slice(&weight.to_be_bytes());
+        raw.extend_from_slice(&sign.to_be_bytes());
+        raw.extend_from_slice(&scale.to_be_bytes());
+        for digit in digits {
+            raw.extend_from_slice(&digit.to_be_bytes());
+        }
+        raw
+    }
+
+    #[test]
+    fn decodes_postgres_numeric_wire_values() {
+        assert_eq!(
+            decode_numeric(&numeric(-1, 0, 4, &[842])),
+            Some("0.0842".into())
+        );
+        assert_eq!(
+            decode_numeric(&numeric(0, 0, 2, &[184, 2_000])),
+            Some("184.20".into())
+        );
+        assert_eq!(
+            decode_numeric(&numeric(1, 0, 3, &[12, 3456, 7_000])),
+            Some("123456.700".into())
+        );
+        assert_eq!(
+            decode_numeric(&numeric(0, 0x4000, 2, &[42, 5_000])),
+            Some("-42.50".into())
+        );
+        assert_eq!(decode_numeric(&numeric(0, 0, 2, &[])), Some("0.00".into()));
+        assert_eq!(
+            decode_numeric(&numeric(0, 0xC000, 0, &[])),
+            Some("NaN".into())
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_postgres_numeric_values() {
+        assert_eq!(decode_numeric(&[]), None);
+        assert_eq!(decode_numeric(&numeric(0, 0, 0, &[10_000])), None);
+    }
 }

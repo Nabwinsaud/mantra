@@ -84,8 +84,69 @@ pub fn map_key_event(
         );
     }
 
+    if focus == Focus::Results {
+        if let Some(pending) = sequence.take() {
+            match (pending, key.code) {
+                ('y', KeyCode::Char('y')) => return Some(Action::YankResultRow),
+                ('d', KeyCode::Char('d')) => return Some(Action::RequestDeleteResultRow),
+                _ => {}
+            }
+        }
+        return match key.code {
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::MoveDown)
+            }
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::MoveUp)
+            }
+            KeyCode::Char('y') => {
+                *sequence = Some('y');
+                Some(Action::YankResultCell)
+            }
+            KeyCode::Char('d') => {
+                *sequence = Some('d');
+                None
+            }
+            KeyCode::Left | KeyCode::Char('h') => Some(Action::MoveLeft),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::MoveDown),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
+            KeyCode::Right | KeyCode::Char('l') => Some(Action::MoveRight),
+            KeyCode::Char('1') => Some(Action::FocusExplorer),
+            KeyCode::Char('2') => Some(Action::FocusEditor),
+            KeyCode::Char('3') => Some(Action::FocusResults),
+            KeyCode::Esc => Some(Action::CloseInspector),
+            KeyCode::Char('?') | KeyCode::F(1) => Some(Action::ToggleHelp),
+            KeyCode::Char('q') => Some(Action::Quit),
+            _ => None,
+        };
+    }
+
+    if focus == Focus::Explorer {
+        *sequence = None;
+        return match key.code {
+            KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::MoveDown)
+            }
+            KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                Some(Action::MoveUp)
+            }
+            KeyCode::Left | KeyCode::Char('h') => Some(Action::MoveLeft),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::MoveDown),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
+            KeyCode::Right | KeyCode::Char('l') => Some(Action::MoveRight),
+            KeyCode::Enter => Some(Action::Activate),
+            KeyCode::Char('1') => Some(Action::FocusExplorer),
+            KeyCode::Char('2') => Some(Action::FocusEditor),
+            KeyCode::Char('3') => Some(Action::FocusResults),
+            KeyCode::Char('?') | KeyCode::F(1) => Some(Action::ToggleHelp),
+            KeyCode::Char('q') => Some(Action::Quit),
+            _ => None,
+        };
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
+            KeyCode::Char('r') if mode == Mode::Normal => Some(Action::Redo),
             KeyCode::Char('n') if focus == Focus::Editor => Some(Action::NewQueryTab),
             KeyCode::Char('n') => Some(Action::MoveDown),
             KeyCode::Char('p') => Some(Action::MoveUp),
@@ -149,6 +210,7 @@ pub fn map_key_event(
             None
         }
         KeyCode::Char('i') => Some(Action::EnterInsertMode),
+        KeyCode::Char('u') => Some(Action::Undo),
         KeyCode::Char('o') => Some(Action::OpenLineBelow),
         KeyCode::Char('O') => Some(Action::OpenLineAbove),
         KeyCode::Char('a') => Some(Action::AppendAfterCursor),
@@ -275,6 +337,71 @@ mod tests {
                 false,
             ),
             Some(Action::DeleteCurrentLine)
+        );
+    }
+
+    #[test]
+    fn result_commands_never_mutate_the_editor() {
+        let mut sequence = None;
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Results,
+                false,
+                false,
+            ),
+            None
+        );
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Results,
+                false,
+                false,
+            ),
+            Some(Action::RequestDeleteResultRow)
+        );
+        assert_ne!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Results,
+                false,
+                false,
+            ),
+            Some(Action::EnterInsertMode)
+        );
+    }
+
+    #[test]
+    fn result_yank_supports_cell_and_row() {
+        let mut sequence = None;
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Results,
+                false,
+                false,
+            ),
+            Some(Action::YankResultCell)
+        );
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Results,
+                false,
+                false,
+            ),
+            Some(Action::YankResultRow)
         );
     }
 

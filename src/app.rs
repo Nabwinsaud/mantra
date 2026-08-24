@@ -1,4 +1,9 @@
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::HashSet,
+    io::Write,
+    process::{Command, Stdio},
+    time::Duration,
+};
 
 use crate::{
     action::Action,
@@ -131,6 +136,12 @@ pub struct CloseTabDialogState {
     pub tab_index: usize,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EditSnapshot {
+    query: String,
+    cursor: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct QueryTab {
     pub query: String,
@@ -138,6 +149,8 @@ pub struct QueryTab {
     pub saved_query_id: Option<i64>,
     pub name: Option<String>,
     pub saved_snapshot: Option<String>,
+    undo_stack: Vec<EditSnapshot>,
+    redo_stack: Vec<EditSnapshot>,
 }
 
 impl QueryTab {
@@ -182,6 +195,8 @@ pub struct App {
     pub query_tabs: Vec<QueryTab>,
     pub active_query_tab: usize,
     pub status_message: Option<String>,
+    undo_stack: Vec<EditSnapshot>,
+    redo_stack: Vec<EditSnapshot>,
     running_statement: Option<String>,
     database: DatabaseService,
     storage: Storage,
@@ -236,9 +251,13 @@ impl App {
                 saved_query_id: None,
                 name: None,
                 saved_snapshot: None,
+                undo_stack: Vec::new(),
+                redo_stack: Vec::new(),
             }],
             active_query_tab: 0,
             status_message: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
             running_statement: None,
             database,
             storage,
@@ -317,6 +336,7 @@ impl App {
             }
             Action::Activate => {}
             Action::OpenLineBelow => {
+                self.record_edit();
                 self.focus = Focus::Editor;
                 let line_end = self.query[self.cursor..]
                     .find('\n')
@@ -327,6 +347,7 @@ impl App {
                 self.completion_index = 0;
             }
             Action::OpenLineAbove => {
+                self.record_edit();
                 self.focus = Focus::Editor;
                 let line_start = self.query[..self.cursor]
                     .rfind('\n')
@@ -336,7 +357,20 @@ impl App {
                 self.mode = Mode::Insert;
                 self.completion_index = 0;
             }
-            Action::DeleteCurrentLine => self.delete_current_line(),
+            Action::DeleteCurrentLine => {
+                self.record_edit();
+                self.delete_current_line();
+            }
+            Action::Undo => self.undo(),
+            Action::Redo => self.redo(),
+            Action::YankResultCell => self.yank_result_cell(),
+            Action::YankResultRow => self.yank_result_row(),
+            Action::RequestDeleteResultRow => {
+                self.status_message = Some(
+                    "Delete blocked: safe primary-key detection and confirmation are not ready"
+                        .into(),
+                );
+            }
             Action::MoveLineStart => self.cursor = self.line_start(),
             Action::MoveFirstNonBlank => {
                 let start = self.line_start();
@@ -378,6 +412,7 @@ impl App {
                 if let Some(character) = self.query[self.cursor..].chars().next()
                     && character != '\n'
                 {
+                    self.record_edit();
                     self.query
                         .drain(self.cursor..self.cursor + character.len_utf8());
                 }
@@ -507,12 +542,14 @@ impl App {
                     .completion_index
                     .min(candidates.len().saturating_sub(1));
                 if let Some(candidate) = candidates.get(selected) {
+                    self.record_edit();
                     let prefix_len = completion::prefix(&self.query, self.cursor).len();
                     let start = self.cursor - prefix_len;
                     self.query.replace_range(start..self.cursor, candidate);
                     self.cursor = start + candidate.len();
                     self.completion_index = 0;
                 } else {
+                    self.record_edit();
                     self.query.insert(self.cursor, '\n');
                     self.cursor += 1;
                 }
@@ -543,16 +580,25 @@ impl App {
                 }
             }
             Action::Insert(character) => {
+                self.record_edit();
                 self.query.insert(self.cursor, character);
                 self.cursor += character.len_utf8();
                 self.completion_index = 0;
             }
             Action::Paste(text) => {
+                if !text.is_empty() {
+                    self.record_edit();
+                }
                 self.query.insert_str(self.cursor, &text);
                 self.cursor += text.len();
                 self.completion_index = 0;
             }
-            Action::Backspace => self.backspace(),
+            Action::Backspace => {
+                if self.cursor > 0 {
+                    self.record_edit();
+                }
+                self.backspace();
+            }
             Action::MoveLeft => {
                 if self.focus == Focus::Results && self.inspector.is_some() {
                     self.inspector_section = self.inspector_section.previous();
@@ -693,6 +739,8 @@ impl App {
             tab.saved_query_id = self.saved_query_id;
             tab.name.clone_from(&self.saved_query_name);
             tab.saved_snapshot.clone_from(&self.saved_query_snapshot);
+            tab.undo_stack.clone_from(&self.undo_stack);
+            tab.redo_stack.clone_from(&self.redo_stack);
         }
     }
 
@@ -713,6 +761,8 @@ impl App {
         self.saved_query_id = tab.saved_query_id;
         self.saved_query_name = tab.name;
         self.saved_query_snapshot = tab.saved_snapshot;
+        self.undo_stack = tab.undo_stack;
+        self.redo_stack = tab.redo_stack;
         self.mode = Mode::Normal;
         self.focus = Focus::Editor;
         self.completion_index = 0;
@@ -734,6 +784,8 @@ impl App {
                 saved_query_id: None,
                 name: None,
                 saved_snapshot: None,
+                undo_stack: Vec::new(),
+                redo_stack: Vec::new(),
             });
         }
         let next = dialog.tab_index.min(self.query_tabs.len() - 1);
@@ -762,6 +814,8 @@ impl App {
             saved_query_id: Some(saved.id),
             name: Some(saved.name.clone()),
             saved_snapshot: Some(saved.sql.clone()),
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         });
         self.active_query_tab = self.query_tabs.len() - 1;
         self.query = saved.sql.clone();
@@ -769,6 +823,8 @@ impl App {
         self.saved_query_id = Some(saved.id);
         self.saved_query_name = Some(saved.name.clone());
         self.saved_query_snapshot = Some(saved.sql);
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.mode = Mode::Normal;
         self.focus = Focus::Editor;
         self.completion_index = 0;
@@ -785,6 +841,8 @@ impl App {
             saved_query_id: None,
             name: None,
             saved_snapshot: None,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         });
         self.active_query_tab = self.query_tabs.len() - 1;
         self.query = query;
@@ -792,6 +850,8 @@ impl App {
         self.saved_query_id = None;
         self.saved_query_name = None;
         self.saved_query_snapshot = None;
+        self.undo_stack.clear();
+        self.redo_stack.clear();
         self.mode = Mode::Normal;
         self.focus = Focus::Editor;
         self.completion_index = 0;
@@ -848,6 +908,8 @@ impl App {
                     saved_query_id: Some(saved.id),
                     name: Some(saved.name),
                     saved_snapshot: Some(saved.sql),
+                    undo_stack: Vec::new(),
+                    redo_stack: Vec::new(),
                 });
                 self.query_tabs.len() - 1
             };
@@ -1252,6 +1314,129 @@ impl App {
             self.cursor = byte_at_column(&self.query[next_start..next_end], next_start, column);
         }
     }
+
+    fn record_edit(&mut self) {
+        const MAX_UNDO_STEPS: usize = 1_000;
+        if self.undo_stack.len() == MAX_UNDO_STEPS {
+            self.undo_stack.remove(0);
+        }
+        self.undo_stack.push(EditSnapshot {
+            query: self.query.clone(),
+            cursor: self.cursor,
+        });
+        self.redo_stack.clear();
+    }
+
+    fn undo(&mut self) {
+        let Some(snapshot) = self.undo_stack.pop() else {
+            self.status_message = Some("Already at oldest change".into());
+            return;
+        };
+        self.redo_stack.push(EditSnapshot {
+            query: self.query.clone(),
+            cursor: self.cursor,
+        });
+        self.query = snapshot.query;
+        self.cursor = snapshot.cursor.min(self.query.len());
+        self.completion_index = 0;
+        self.status_message = Some("Undid change".into());
+    }
+
+    fn redo(&mut self) {
+        let Some(snapshot) = self.redo_stack.pop() else {
+            self.status_message = Some("Already at newest change".into());
+            return;
+        };
+        self.undo_stack.push(EditSnapshot {
+            query: self.query.clone(),
+            cursor: self.cursor,
+        });
+        self.query = snapshot.query;
+        self.cursor = snapshot.cursor.min(self.query.len());
+        self.completion_index = 0;
+        self.status_message = Some("Redid change".into());
+    }
+
+    fn yank_result_cell(&mut self) {
+        let Some(value) = self
+            .result
+            .as_ref()
+            .and_then(|result| result.rows.get(self.result_row))
+            .and_then(|row| row.get(self.result_column))
+            .cloned()
+        else {
+            self.status_message = Some("No result cell to copy".into());
+            return;
+        };
+        self.finish_yank(&value, "cell");
+    }
+
+    fn yank_result_row(&mut self) {
+        let Some(row) = self
+            .result
+            .as_ref()
+            .and_then(|result| result.rows.get(self.result_row))
+        else {
+            self.status_message = Some("No result row to copy".into());
+            return;
+        };
+        let value = row.join("\t");
+        self.finish_yank(&value, "row as TSV");
+    }
+
+    fn finish_yank(&mut self, value: &str, description: &str) {
+        match copy_to_clipboard(value) {
+            Ok(()) => self.status_message = Some(format!("Copied {description}")),
+            Err(error) => {
+                self.status_message = Some(format!("Could not copy {description}: {error}"))
+            }
+        }
+    }
+}
+
+fn copy_to_clipboard(value: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if pipe_to_command("pbcopy", &[], value).is_ok() {
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    for (program, arguments) in [
+        ("wl-copy", &[][..]),
+        ("xclip", &["-selection", "clipboard"][..]),
+        ("xsel", &["--clipboard", "--input"][..]),
+    ] {
+        if pipe_to_command(program, arguments, value).is_ok() {
+            return Ok(());
+        }
+    }
+
+    Err("install pbcopy, wl-copy, xclip, or xsel".into())
+}
+
+fn pipe_to_command(program: &str, arguments: &[&str], value: &str) -> Result<(), String> {
+    let mut child = Command::new(program)
+        .args(arguments)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| error.to_string())?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| "clipboard input unavailable".to_owned())?
+        .write_all(value.as_bytes())
+        .map_err(|error| error.to_string())?;
+    child
+        .wait()
+        .map_err(|error| error.to_string())
+        .and_then(|status| {
+            status
+                .success()
+                .then_some(())
+                .ok_or_else(|| format!("{program} failed"))
+        })
 }
 
 fn add_category(
@@ -1324,6 +1509,41 @@ mod tests {
 
         assert_eq!(app.query, "x");
         assert_eq!(app.cursor, 0);
+    }
+
+    #[tokio::test]
+    async fn undo_and_redo_restore_query_and_cursor() {
+        let mut app = app();
+        app.query.clear();
+        app.cursor = 0;
+        app.undo_stack.clear();
+        app.redo_stack.clear();
+
+        app.update(Action::Insert('λ')).await;
+        app.update(Action::Insert('x')).await;
+        app.update(Action::Undo).await;
+        assert_eq!((app.query.as_str(), app.cursor), ("λ", 2));
+
+        app.update(Action::Redo).await;
+        assert_eq!((app.query.as_str(), app.cursor), ("λx", 3));
+    }
+
+    #[tokio::test]
+    async fn undo_history_is_scoped_to_each_query_tab() {
+        let mut app = app();
+        app.query.clear();
+        app.cursor = 0;
+        app.undo_stack.clear();
+
+        app.update(Action::Insert('a')).await;
+        app.update(Action::NewQueryTab).await;
+        app.update(Action::Insert('b')).await;
+        app.update(Action::Undo).await;
+        assert_eq!(app.query, "");
+
+        app.update(Action::PreviousQueryTab).await;
+        app.update(Action::Undo).await;
+        assert_eq!(app.query, "");
     }
 
     #[tokio::test]
