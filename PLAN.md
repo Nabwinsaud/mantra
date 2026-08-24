@@ -72,7 +72,7 @@ turning a table view into an unreviewable mutation tool.
 - [ ] `e` edit the selected cell with type-aware input
 - [ ] Toggle a cell between a value and `NULL` without confusing the two
 - [ ] `i` insert a row with defaults, required fields, enums, and foreign-key hints
-- [ ] `d` delete the selected row only after confirmation
+- [ ] `dd` request deletion of the selected row, then require confirmation in a modal
 - [ ] Build `UPDATE`/`DELETE` predicates from primary keys or an explicitly chosen key
 - [ ] Refuse ambiguous mutations when no safe key exists
 - [ ] Show a SQL diff/preview before execution

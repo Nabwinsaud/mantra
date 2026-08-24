@@ -258,6 +258,7 @@ fn display_cell(row: &Row, index: usize) -> String {
         Type::INT8 => format_optional(row.try_get::<_, Option<i64>>(index)),
         Type::FLOAT4 => format_optional(row.try_get::<_, Option<f32>>(index)),
         Type::FLOAT8 => format_optional(row.try_get::<_, Option<f64>>(index)),
+        Type::NUMERIC => format_optional(row.try_get::<_, Option<PgNumeric>>(index)),
         Type::UUID => format_optional(row.try_get::<_, Option<uuid::Uuid>>(index)),
         Type::TIMESTAMP => format_optional(row.try_get::<_, Option<chrono::NaiveDateTime>>(index)),
         Type::TIMESTAMPTZ => {
@@ -282,6 +283,98 @@ fn display_cell(row: &Row, index: usize) -> String {
             .map(|value| value.map_or_else(|| "NULL".into(), |raw| raw.0))
             .unwrap_or_else(|_| format!("<{}>", type_name(row, index))),
     }
+}
+
+#[derive(Debug)]
+struct PgNumeric(String);
+
+impl std::fmt::Display for PgNumeric {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+impl<'a> FromSql<'a> for PgNumeric {
+    fn from_sql(
+        _ty: &Type,
+        raw: &'a [u8],
+    ) -> Result<Self, Box<dyn std::error::Error + Sync + Send>> {
+        decode_numeric(raw)
+            .map(Self)
+            .ok_or_else(|| "invalid PostgreSQL numeric value".into())
+    }
+
+    fn accepts(ty: &Type) -> bool {
+        *ty == Type::NUMERIC
+    }
+}
+
+fn decode_numeric(raw: &[u8]) -> Option<String> {
+    const POSITIVE: u16 = 0x0000;
+    const NEGATIVE: u16 = 0x4000;
+    const NAN: u16 = 0xC000;
+    const POSITIVE_INFINITY: u16 = 0xD000;
+    const NEGATIVE_INFINITY: u16 = 0xF000;
+
+    if raw.len() < 8 {
+        return None;
+    }
+    let digits_count = u16::from_be_bytes([raw[0], raw[1]]) as usize;
+    let weight = i16::from_be_bytes([raw[2], raw[3]]) as i32;
+    let sign = u16::from_be_bytes([raw[4], raw[5]]);
+    let scale = u16::from_be_bytes([raw[6], raw[7]]) as usize;
+    if raw.len() != 8 + digits_count * 2 {
+        return None;
+    }
+    match sign {
+        NAN => return Some("NaN".into()),
+        POSITIVE_INFINITY => return Some("Infinity".into()),
+        NEGATIVE_INFINITY => return Some("-Infinity".into()),
+        POSITIVE | NEGATIVE => {}
+        _ => return None,
+    }
+
+    let digits = raw[8..]
+        .chunks_exact(2)
+        .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
+        .collect::<Vec<_>>();
+    if digits.iter().any(|digit| *digit > 9_999) {
+        return None;
+    }
+    let digit_at = |position: i32| {
+        let index = weight - position;
+        usize::try_from(index)
+            .ok()
+            .and_then(|index| digits.get(index))
+            .copied()
+            .unwrap_or(0)
+    };
+
+    let mut value = String::new();
+    if sign == NEGATIVE && digits.iter().any(|digit| *digit != 0) {
+        value.push('-');
+    }
+    if weight < 0 {
+        value.push('0');
+    } else {
+        for position in (0..=weight).rev() {
+            let digit = digit_at(position);
+            if position == weight {
+                value.push_str(&digit.to_string());
+            } else {
+                value.push_str(&format!("{digit:04}"));
+            }
+        }
+    }
+    if scale > 0 {
+        value.push('.');
+        let groups = scale.div_ceil(4);
+        for group in 1..=groups {
+            value.push_str(&format!("{:04}", digit_at(-(group as i32))));
+        }
+        value.truncate(value.len() - (groups * 4 - scale));
+    }
+    Some(value)
 }
 
 #[derive(Debug)]
@@ -327,6 +420,54 @@ fn safe_error(error: &tokio_postgres::Error) -> String {
             message
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_numeric;
+
+    fn numeric(weight: i16, sign: u16, scale: u16, digits: &[u16]) -> Vec<u8> {
+        let mut raw = Vec::with_capacity(8 + digits.len() * 2);
+        raw.extend_from_slice(&(digits.len() as u16).to_be_bytes());
+        raw.extend_from_slice(&weight.to_be_bytes());
+        raw.extend_from_slice(&sign.to_be_bytes());
+        raw.extend_from_slice(&scale.to_be_bytes());
+        for digit in digits {
+            raw.extend_from_slice(&digit.to_be_bytes());
+        }
+        raw
+    }
+
+    #[test]
+    fn decodes_postgres_numeric_wire_values() {
+        assert_eq!(
+            decode_numeric(&numeric(-1, 0, 4, &[842])),
+            Some("0.0842".into())
+        );
+        assert_eq!(
+            decode_numeric(&numeric(0, 0, 2, &[184, 2_000])),
+            Some("184.20".into())
+        );
+        assert_eq!(
+            decode_numeric(&numeric(1, 0, 3, &[12, 3456, 7_000])),
+            Some("123456.700".into())
+        );
+        assert_eq!(
+            decode_numeric(&numeric(0, 0x4000, 2, &[42, 5_000])),
+            Some("-42.50".into())
+        );
+        assert_eq!(decode_numeric(&numeric(0, 0, 2, &[])), Some("0.00".into()));
+        assert_eq!(
+            decode_numeric(&numeric(0, 0xC000, 0, &[])),
+            Some("NaN".into())
+        );
+    }
+
+    #[test]
+    fn rejects_malformed_postgres_numeric_values() {
+        assert_eq!(decode_numeric(&[]), None);
+        assert_eq!(decode_numeric(&numeric(0, 0, 0, &[10_000])), None);
+    }
 }
 
 async fn load_completion_items(client: &Client) -> (Vec<String>, Vec<String>) {
