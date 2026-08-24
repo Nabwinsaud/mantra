@@ -73,8 +73,11 @@ The connection URL is used only in memory and is never displayed or logged.
 - `<leader>bd`: close the current tab after confirmation without deleting its saved query
 - `<leader>ff`: fuzzy-find saved queries for the current project and database
 - `<leader>fh`: fuzzy-find automatically recorded query history
+- `<leader>ft`: fuzzy-find a table and open its inspector
+- `<leader>e`: toggle the Explorer sidebar
 - `<leader>fs`: save the current SQL as a new query instead of updating the opened one
 - `gt` / `gT`: move to the next / previous SQL buffer tab
+- `<leader>bn` / `<leader>bp`: move to the next / previous SQL buffer tab
 - `o`: open a new line below and enter INSERT mode
 - `u` / `Ctrl-r` in the NORMAL SQL editor: undo / redo changes in the current buffer
 - `dd`: delete the current line

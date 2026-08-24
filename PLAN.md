@@ -90,6 +90,8 @@ turning a table view into an unreviewable mutation tool.
 
 ## Editor and UX backlog
 
+- [x] Add fuzzy table search (`<leader>ft`) and Explorer sidebar toggle (`<leader>e`)
+- [x] Support Vim/LazyVim-style query-buffer navigation (`gt`/`gT`, `<leader>bn`/`bp`)
 - [ ] Make focus and mode unmistakable in every panel
 - [ ] Add mouse-clickable command palette and keymap help
 - [ ] Add terminal capability detection and reliable fallbacks for Ctrl/Alt shortcuts

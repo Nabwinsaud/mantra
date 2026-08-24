@@ -35,8 +35,12 @@ pub fn mouse_action(column: u16, row: u16, width: u16, height: u16, app: &App) -
     .split(frame_area);
     let content =
         Layout::vertical([Constraint::Percentage(58), Constraint::Percentage(42)]).split(outer[1]);
-    let top = Layout::horizontal([Constraint::Percentage(30), Constraint::Percentage(70)])
-        .split(content[0]);
+    let top = Layout::horizontal(if app.explorer_visible {
+        [Constraint::Percentage(30), Constraint::Percentage(70)]
+    } else {
+        [Constraint::Length(0), Constraint::Percentage(100)]
+    })
+    .split(content[0]);
     let tabs_area = editor_areas(top[1]).0;
     if row == tabs_area.y && column >= tabs_area.x && column < tabs_area.right() {
         let mut start = tabs_area.x;
@@ -96,10 +100,16 @@ pub fn draw(frame: &mut Frame, app: &App) {
         .split(outer[1]);
     let top = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(30), Constraint::Percentage(70)])
+        .constraints(if app.explorer_visible {
+            [Constraint::Percentage(30), Constraint::Percentage(70)]
+        } else {
+            [Constraint::Length(0), Constraint::Percentage(100)]
+        })
         .split(content[0]);
 
-    draw_explorer(frame, top[0], app);
+    if app.explorer_visible {
+        draw_explorer(frame, top[0], app);
+    }
     draw_editor(frame, top[1], app);
     draw_results(frame, content[1], app);
     draw_status(frame, outer[2], app);
@@ -727,6 +737,7 @@ fn draw_which_key(frame: &mut Frame, app: &App) {
             &[
                 ("n", "new query"),
                 ("r", "run statement"),
+                ("e", "toggle explorer"),
                 ("f", "+find"),
                 ("b", "+buffer"),
                 ("?", "help"),
@@ -734,9 +745,21 @@ fn draw_which_key(frame: &mut Frame, app: &App) {
         ),
         'f' => (
             " Leader › find ",
-            &[("f", "saved queries"), ("h", "history"), ("s", "save as")],
+            &[
+                ("f", "saved queries"),
+                ("h", "history"),
+                ("t", "tables"),
+                ("s", "save as"),
+            ],
         ),
-        'b' => (" Leader › buffer ", &[("d", "close query tab")]),
+        'b' => (
+            " Leader › buffer ",
+            &[
+                ("n", "next query tab"),
+                ("p", "previous query tab"),
+                ("d", "close query tab"),
+            ],
+        ),
         'd' if app.focus == Focus::Results => (" Delete result ", &[("d", "delete row safely")]),
         'd' => (" Delete ", &[("d", "delete line")]),
         'y' => (" Yank result ", &[("y", "copy row as TSV")]),
@@ -952,6 +975,7 @@ fn draw_finder(frame: &mut Frame, app: &App) {
     let title = match finder.kind {
         FinderKind::SavedQueries => " Saved queries · <leader>ff ",
         FinderKind::History => " Query history · <leader>fh ",
+        FinderKind::Tables => " Tables · <leader>ft ",
     };
     let area = centered_rect(82, 76, frame.area());
     frame.render_widget(Clear, area);
@@ -1011,7 +1035,7 @@ fn draw_finder(frame: &mut Frame, app: &App) {
     frame.render_widget(
         Paragraph::new(if lines.is_empty() {
             vec![Line::styled(
-                " No matching queries",
+                " No matching items",
                 Style::default().fg(Color::DarkGray),
             )]
         } else {
@@ -1039,9 +1063,22 @@ fn draw_finder(frame: &mut Frame, app: &App) {
                 let status = if entry.success { "success" } else { "failed" };
                 format!(" SQL preview · {status} ")
             }
+            FinderItem::Table { schema, table } => {
+                format!(" Table inspector · {schema}.{table} ")
+            }
         },
     );
     let preview = selected_item.map_or_else(Vec::new, |item| {
+        if let FinderItem::Table { schema, table } = item {
+            return vec![
+                Line::styled(
+                    format!("Open {schema}.{table}"),
+                    Style::default().fg(Color::Cyan),
+                ),
+                Line::from(""),
+                Line::from("Press Enter to inspect columns, constraints, indexes, and storage."),
+            ];
+        }
         let mut lines = crate::sql::highlight::lines(item.sql());
         if let FinderItem::History(entry) = item
             && let Some(error) = &entry.error
@@ -1094,8 +1131,11 @@ fn draw_help(frame: &mut Frame) {
             "New SQL buffer (from NORMAL editor mode)",
         ),
         key_line("Space b d", "Close current tab after confirmation"),
+        key_line("Space b n / b p", "Next / previous SQL buffer tab"),
+        key_line("Space e", "Toggle the Explorer sidebar"),
         key_line("Space f f", "Find saved queries for this database"),
         key_line("Space f h", "Search query history"),
+        key_line("Space f t", "Fuzzy-find and inspect a table"),
         key_line("Space f s", "Save current SQL as a new query"),
         key_line("? / F1", "Open or close this cheat sheet"),
         key_line("q", "Quit from NORMAL mode"),

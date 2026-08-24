@@ -192,11 +192,15 @@ pub fn map_key_event(
         return match (pending, key.code) {
             (' ', KeyCode::Char('r')) => Some(Action::RunQuery),
             (' ', KeyCode::Char('n')) => Some(Action::NewQueryTab),
+            (' ', KeyCode::Char('e')) => Some(Action::ToggleExplorer),
             (' ', KeyCode::Char('?')) => Some(Action::ToggleHelp),
             ('f', KeyCode::Char('f')) => Some(Action::OpenSavedQueryFinder),
             ('f', KeyCode::Char('h')) => Some(Action::OpenHistoryFinder),
             ('f', KeyCode::Char('s')) => Some(Action::SaveQueryAs),
+            ('f', KeyCode::Char('t')) => Some(Action::OpenTableFinder),
             ('b', KeyCode::Char('d')) => Some(Action::RequestCloseQueryTab),
+            ('b', KeyCode::Char('n')) => Some(Action::NextQueryTab),
+            ('b', KeyCode::Char('p')) => Some(Action::PreviousQueryTab),
             ('d', KeyCode::Char('d')) => Some(Action::DeleteCurrentLine),
             ('g', KeyCode::Char('g')) => Some(Action::GoToFirstLine),
             ('g', KeyCode::Char('t')) => Some(Action::NextQueryTab),
@@ -482,6 +486,59 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    #[test]
+    fn leader_opens_table_finder_and_toggles_explorer() {
+        let mut sequence = None;
+        for key in [' ', 'f'] {
+            assert_eq!(
+                map_key_event(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    &mut sequence,
+                    Mode::Normal,
+                    Focus::Editor,
+                    false,
+                    false,
+                ),
+                None
+            );
+        }
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('t'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::OpenTableFinder)
+        );
+
+        let mut sequence = None;
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            None
+        );
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::ToggleExplorer)
+        );
     }
 
     #[test]

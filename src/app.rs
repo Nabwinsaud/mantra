@@ -86,12 +86,14 @@ pub struct ExplorerEntry {
 pub enum FinderKind {
     SavedQueries,
     History,
+    Tables,
 }
 
 #[derive(Debug, Clone)]
 pub enum FinderItem {
     Saved(SavedQuery),
     History(HistoryEntry),
+    Table { schema: String, table: String },
 }
 
 impl FinderItem {
@@ -99,6 +101,7 @@ impl FinderItem {
         match self {
             Self::Saved(query) => &query.sql,
             Self::History(entry) => &entry.sql,
+            Self::Table { .. } => "",
         }
     }
 
@@ -116,6 +119,7 @@ impl FinderItem {
                     entry.executed_at, entry.id
                 )
             }
+            Self::Table { schema, table } => format!("{schema}.{table}"),
         }
     }
 }
@@ -188,6 +192,7 @@ pub struct App {
     pub help_visible: bool,
     pub focus: Focus,
     pub explorer_expanded: bool,
+    pub explorer_visible: bool,
     pub catalog: DatabaseCatalog,
     pub explorer_open: HashSet<String>,
     pub explorer_selection: usize,
@@ -242,6 +247,7 @@ impl App {
             help_visible: false,
             focus: Focus::Editor,
             explorer_expanded: true,
+            explorer_visible: true,
             catalog: DatabaseCatalog::default(),
             explorer_open: HashSet::from(["database".into()]),
             explorer_selection: 0,
@@ -476,6 +482,7 @@ impl App {
             Action::SaveQueryAs => self.save_query_as(),
             Action::OpenSavedQueryFinder => self.open_finder(FinderKind::SavedQueries),
             Action::OpenHistoryFinder => self.open_finder(FinderKind::History),
+            Action::OpenTableFinder => self.open_finder(FinderKind::Tables),
             Action::OverlayInsert(character) => self.overlay_insert(character),
             Action::OverlayBackspace => self.overlay_backspace(),
             Action::OverlayNext => self.overlay_move(1),
@@ -494,7 +501,7 @@ impl App {
                         }
                     }
                 } else {
-                    self.overlay_accept();
+                    self.overlay_accept().await;
                 }
             }
             Action::OverlayCancel => {
@@ -505,25 +512,57 @@ impl App {
             }
             Action::ToggleHelp => self.help_visible = !self.help_visible,
             Action::FocusNext => {
-                self.focus = match self.focus {
-                    Focus::Explorer => Focus::Editor,
-                    Focus::Editor => Focus::Results,
-                    Focus::Results => Focus::Explorer,
-                }
+                self.focus = if self.explorer_visible {
+                    match self.focus {
+                        Focus::Explorer => Focus::Editor,
+                        Focus::Editor => Focus::Results,
+                        Focus::Results => Focus::Explorer,
+                    }
+                } else if self.focus == Focus::Editor {
+                    Focus::Results
+                } else {
+                    Focus::Editor
+                };
             }
             Action::FocusPrevious => {
-                self.focus = match self.focus {
-                    Focus::Explorer => Focus::Results,
-                    Focus::Editor => Focus::Explorer,
-                    Focus::Results => Focus::Editor,
-                }
+                self.focus = if self.explorer_visible {
+                    match self.focus {
+                        Focus::Explorer => Focus::Results,
+                        Focus::Editor => Focus::Explorer,
+                        Focus::Results => Focus::Editor,
+                    }
+                } else if self.focus == Focus::Editor {
+                    Focus::Results
+                } else {
+                    Focus::Editor
+                };
             }
-            Action::FocusLeft => self.focus = Focus::Explorer,
+            Action::FocusLeft => {
+                self.explorer_visible = true;
+                self.focus = Focus::Explorer;
+            }
             Action::FocusRight | Action::FocusUp => self.focus = Focus::Editor,
             Action::FocusDown => self.focus = Focus::Results,
-            Action::FocusExplorer => self.focus = Focus::Explorer,
+            Action::FocusExplorer => {
+                self.explorer_visible = true;
+                self.focus = Focus::Explorer;
+            }
             Action::FocusEditor => self.focus = Focus::Editor,
             Action::FocusResults => self.focus = Focus::Results,
+            Action::ToggleExplorer => {
+                self.explorer_visible = !self.explorer_visible;
+                if !self.explorer_visible && self.focus == Focus::Explorer {
+                    self.focus = Focus::Editor;
+                }
+                self.status_message = Some(
+                    if self.explorer_visible {
+                        "Explorer shown"
+                    } else {
+                        "Explorer hidden"
+                    }
+                    .into(),
+                );
+            }
             Action::FocusQueryTab(index) => self.activate_query_tab(index),
             Action::NewQueryTab => {
                 self.open_scratch_tab(String::new());
@@ -1073,6 +1112,18 @@ impl App {
                 .storage
                 .history(database_name, 1_000)
                 .map(|items| items.into_iter().map(FinderItem::History).collect()),
+            FinderKind::Tables => Ok::<Vec<_>, anyhow::Error>(
+                self.catalog
+                    .schemas
+                    .iter()
+                    .flat_map(|schema| {
+                        schema.tables.iter().map(|table| FinderItem::Table {
+                            schema: schema.name.clone(),
+                            table: table.clone(),
+                        })
+                    })
+                    .collect(),
+            ),
         };
         match loaded {
             Ok(items) => {
@@ -1125,7 +1176,7 @@ impl App {
         }
     }
 
-    fn overlay_accept(&mut self) {
+    async fn overlay_accept(&mut self) {
         if self.close_tab_dialog.is_some() {
             self.close_tab_dialog = None;
             return;
@@ -1172,6 +1223,16 @@ impl App {
                 } else {
                     self.open_scratch_tab(entry.sql);
                     self.status_message = Some("Opened history in a new scratch tab".into());
+                }
+            }
+            FinderItem::Table { schema, table } => {
+                self.inspector_loading = true;
+                self.inspector = None;
+                self.inspector_section = InspectorSection::Columns;
+                self.focus = Focus::Results;
+                if self.database.inspect_table(schema, table).await.is_err() {
+                    self.inspector_loading = false;
+                    self.error = Some("database worker is unavailable".into());
                 }
             }
         }
@@ -1723,6 +1784,46 @@ mod tests {
             "UPDATE \"public\".\"messages\"\nSET \"content\" = 'O''Reilly'\nWHERE \"id\" = '4';"
         );
         assert_eq!(app.query_tabs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn table_finder_filters_catalog_tables() {
+        let mut app = app();
+        app.database_name = Some("project_db".into());
+        app.catalog.schemas = vec![crate::database::SchemaCatalog {
+            name: "public".into(),
+            tables: vec!["agents".into(), "messages".into()],
+            views: Vec::new(),
+            functions: Vec::new(),
+        }];
+
+        app.update(Action::OpenTableFinder).await;
+        for character in "agents".chars() {
+            app.update(Action::OverlayInsert(character)).await;
+        }
+
+        let finder = app.finder.as_ref().expect("table finder");
+        assert_eq!(finder.kind, FinderKind::Tables);
+        assert_eq!(app.finder_matches().len(), 1);
+        assert_eq!(
+            finder.items[app.finder_matches()[0]].label(),
+            "public.agents"
+        );
+    }
+
+    #[tokio::test]
+    async fn hiding_explorer_moves_focus_and_skips_hidden_panel() {
+        let mut app = app();
+        app.focus = Focus::Explorer;
+
+        app.update(Action::ToggleExplorer).await;
+        assert!(!app.explorer_visible);
+        assert_eq!(app.focus, Focus::Editor);
+
+        app.update(Action::FocusPrevious).await;
+        assert_eq!(app.focus, Focus::Results);
+        app.update(Action::FocusNext).await;
+        assert_eq!(app.focus, Focus::Editor);
     }
 
     #[tokio::test]
