@@ -694,6 +694,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         .unwrap_or_default();
     let hint = if app.key_sequence.is_some() {
         "which-key  •  Esc cancel"
+    } else if app.error.is_some() && app.focus == Focus::Results {
+        "y Copy PostgreSQL error"
     } else if app.inspector.is_some() && app.focus == Focus::Results {
         "[/] Sections  •  p Preview  •  yy Schema  •  ya AI prompt"
     } else if app.focus == Focus::Results {

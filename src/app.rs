@@ -1524,6 +1524,10 @@ impl App {
     }
 
     fn yank_result_cell(&mut self) {
+        if let Some(error) = self.error.clone() {
+            self.finish_yank(&error, "PostgreSQL error");
+            return;
+        }
         if self.inspector.is_some() {
             self.status_message =
                 Some("Table Inspector: press yy for schema or ya for AI prompt".into());
@@ -1543,6 +1547,10 @@ impl App {
     }
 
     fn yank_result_row(&mut self) {
+        if let Some(error) = self.error.clone() {
+            self.finish_yank(&error, "PostgreSQL error");
+            return;
+        }
         if let Some(details) = &self.inspector {
             let value = table_markdown(details);
             self.finish_yank(

@@ -62,6 +62,7 @@ The connection URL is used only in memory and is never displayed or logged.
 - Mouse click: focus panels and toggle Explorer nodes
 - `h/j/k/l`: navigate result cells when Results is active
 - `y` / `yy` in Results: copy the selected cell / selected row as TSV
+- `y` in Results when a query fails: copy the complete PostgreSQL error
 - `e` in Results: open a primary-key-scoped `UPDATE` template for the selected cell
 - `dd` in Results: confirm, then open a primary-key-scoped `DELETE` in a new SQL tab
 - `yy` in Table Inspector: copy the complete table schema as shareable Markdown
