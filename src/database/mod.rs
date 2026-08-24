@@ -5,7 +5,7 @@ use std::{
 
 use tokio::sync::mpsc;
 use tokio_postgres::{
-    Client, NoTls, Row,
+    Client, Column, NoTls, Row,
     types::{FromSql, Type},
 };
 
@@ -14,6 +14,21 @@ pub struct QueryResult {
     pub columns: Vec<String>,
     pub rows: Vec<Vec<String>>,
     pub elapsed: Duration,
+    pub sources: Vec<Option<ResultColumnSource>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResultColumnSource {
+    pub schema: String,
+    pub table: String,
+    pub column: String,
+    pub primary_key: Vec<ResultKeyColumn>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResultKeyColumn {
+    pub name: String,
+    pub result_index: usize,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -157,10 +172,15 @@ impl DatabaseService {
                             .iter()
                             .map(|column| column.name().to_owned())
                             .collect();
+                        let sources = load_result_sources(active_client, statement.columns()).await;
                         match active_client.query(&statement, &[]).await {
                             Ok(rows) => {
-                                let result =
-                                    QueryResult::from_rows(columns, rows, started.elapsed());
+                                let result = QueryResult::from_rows(
+                                    columns,
+                                    sources,
+                                    rows,
+                                    started.elapsed(),
+                                );
                                 let _ = events_tx.send(DatabaseEvent::QueryFinished(result)).await;
                             }
                             Err(error) => {
@@ -228,7 +248,12 @@ impl DatabaseService {
 }
 
 impl QueryResult {
-    fn from_rows(columns: Vec<String>, rows: Vec<Row>, elapsed: Duration) -> Self {
+    fn from_rows(
+        columns: Vec<String>,
+        sources: Vec<Option<ResultColumnSource>>,
+        rows: Vec<Row>,
+        elapsed: Duration,
+    ) -> Self {
         let rows = rows
             .iter()
             .map(|row| {
@@ -241,8 +266,104 @@ impl QueryResult {
             columns,
             rows,
             elapsed,
+            sources,
         }
     }
+}
+
+async fn load_result_sources(
+    client: &Client,
+    columns: &[Column],
+) -> Vec<Option<ResultColumnSource>> {
+    let mut tables = BTreeMap::new();
+    for oid in columns.iter().filter_map(Column::table_oid) {
+        if tables.contains_key(&oid) {
+            continue;
+        }
+        if let Some(table) = load_result_table(client, oid).await {
+            tables.insert(oid, table);
+        }
+    }
+
+    columns
+        .iter()
+        .map(|column| {
+            let oid = column.table_oid()?;
+            let column_id = column.column_id()?;
+            let table = tables.get(&oid)?;
+            let source_column = table
+                .columns
+                .iter()
+                .find(|(attribute, _)| *attribute == column_id)?
+                .1
+                .clone();
+            let primary_key = table
+                .primary_key
+                .iter()
+                .map(|(attribute, name)| {
+                    columns
+                        .iter()
+                        .position(|candidate| {
+                            candidate.table_oid() == Some(oid)
+                                && candidate.column_id() == Some(*attribute)
+                        })
+                        .map(|result_index| ResultKeyColumn {
+                            name: name.clone(),
+                            result_index,
+                        })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            (!primary_key.is_empty()).then(|| ResultColumnSource {
+                schema: table.schema.clone(),
+                table: table.table.clone(),
+                column: source_column,
+                primary_key,
+            })
+        })
+        .collect()
+}
+
+struct ResultTable {
+    schema: String,
+    table: String,
+    columns: Vec<(i16, String)>,
+    primary_key: Vec<(i16, String)>,
+}
+
+async fn load_result_table(client: &Client, oid: u32) -> Option<ResultTable> {
+    let rows = client
+        .query(
+            "SELECT n.nspname, c.relname, a.attnum, a.attname,
+                    EXISTS (
+                        SELECT 1 FROM pg_index i
+                        WHERE i.indrelid = c.oid AND i.indisprimary
+                          AND a.attnum = ANY(i.indkey)
+                    ) AS is_primary
+             FROM pg_class c
+             JOIN pg_namespace n ON n.oid = c.relnamespace
+             JOIN pg_attribute a ON a.attrelid = c.oid
+             WHERE c.oid = $1::oid AND a.attnum > 0 AND NOT a.attisdropped
+             ORDER BY a.attnum",
+            &[&oid],
+        )
+        .await
+        .ok()?;
+    let first = rows.first()?;
+    let mut table = ResultTable {
+        schema: first.get(0),
+        table: first.get(1),
+        columns: Vec::new(),
+        primary_key: Vec::new(),
+    };
+    for row in rows {
+        let attribute: i16 = row.get(2);
+        let name: String = row.get(3);
+        table.columns.push((attribute, name.clone()));
+        if row.get(4) {
+            table.primary_key.push((attribute, name));
+        }
+    }
+    Some(table)
 }
 
 fn display_cell(row: &Row, index: usize) -> String {

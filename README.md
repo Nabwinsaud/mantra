@@ -62,7 +62,8 @@ The connection URL is used only in memory and is never displayed or logged.
 - Mouse click: focus panels and toggle Explorer nodes
 - `h/j/k/l`: navigate result cells when Results is active
 - `y` / `yy` in Results: copy the selected cell / selected row as TSV
-- `dd` in Results: request safe row deletion (currently blocked until primary-key confirmation is available)
+- `e` in Results: open a primary-key-scoped `UPDATE` template for the selected cell
+- `dd` in Results: confirm, then open a primary-key-scoped `DELETE` in a new SQL tab
 - `Tab` in INSERT mode: accept the highlighted SQL completion
 - `Ctrl-n` / `Ctrl-p`: select the next / previous completion
 - `Enter` in INSERT mode: accept completion, or insert a newline when none is shown

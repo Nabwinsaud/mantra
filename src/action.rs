@@ -32,6 +32,7 @@ pub enum Action {
     Redo,
     YankResultCell,
     YankResultRow,
+    EditResultCell,
     RequestDeleteResultRow,
     MoveLineStart,
     MoveFirstNonBlank,

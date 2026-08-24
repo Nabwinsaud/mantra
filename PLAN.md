@@ -69,13 +69,13 @@ turning a table view into an unreviewable mutation tool.
 
 ### Safe mutation
 
-- [ ] `e` edit the selected cell with type-aware input
+- [x] `e` generate a primary-key-scoped `UPDATE` template for the selected cell
 - [ ] Toggle a cell between a value and `NULL` without confusing the two
 - [ ] `i` insert a row with defaults, required fields, enums, and foreign-key hints
-- [ ] `dd` request deletion of the selected row, then require confirmation in a modal
-- [ ] Build `UPDATE`/`DELETE` predicates from primary keys or an explicitly chosen key
-- [ ] Refuse ambiguous mutations when no safe key exists
-- [ ] Show a SQL diff/preview before execution
+- [x] `dd` request deletion of the selected row, then require confirmation in a modal
+- [x] Build generated `UPDATE`/`DELETE` predicates from PostgreSQL primary-key metadata
+- [x] Refuse ambiguous generated mutations when no safe key exists
+- [x] Show generated mutation SQL before execution
 - [ ] Run edits inside an explicit transaction with commit and rollback controls
 - [ ] Show affected-row counts and detect unexpected multi-row changes
 - [ ] Handle permission errors, constraint errors, conflicts, and stale rows clearly

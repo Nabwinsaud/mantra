@@ -114,6 +114,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
     if app.close_tab_dialog.is_some() {
         draw_close_tab_dialog(frame, app);
     }
+    if app.confirmation_dialog.is_some() {
+        draw_confirmation_dialog(frame, app);
+    }
     if app.help_visible {
         draw_help(frame);
     }
@@ -675,7 +678,7 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
     let hint = if app.key_sequence.is_some() {
         "which-key  •  Esc cancel"
     } else if app.focus == Focus::Results {
-        "h/j/k/l Navigate  •  y Cell  •  yy Row  •  dd Delete"
+        "h/j/k/l Navigate  •  y/yy Copy  •  e Edit SQL  •  dd Delete SQL"
     } else if app.mode == Mode::Insert {
         "Esc Normal  •  type to edit"
     } else {
@@ -888,6 +891,40 @@ fn draw_close_tab_dialog(frame: &mut Frame, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ),
         confirm,
+    );
+}
+
+fn draw_confirmation_dialog(frame: &mut Frame, app: &App) {
+    let Some(dialog) = &app.confirmation_dialog else {
+        return;
+    };
+    let area = centered_fixed(84, 15, frame.area());
+    frame.render_widget(Clear, area);
+    let sql = dialog
+        .sql
+        .lines()
+        .take(6)
+        .map(|line| Line::styled(line.to_owned(), Style::default().fg(Color::LightBlue)))
+        .collect::<Vec<_>>();
+    let mut lines = vec![Line::from(dialog.message.clone()), Line::from("")];
+    lines.extend(sql);
+    lines.extend([
+        Line::from(""),
+        Line::styled(
+            "Enter confirm  •  Esc cancel",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }).block(
+            Block::default()
+                .title(format!(" {} ", dialog.title))
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Yellow)),
+        ),
+        area,
     );
 }
 

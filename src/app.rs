@@ -136,6 +136,19 @@ pub struct CloseTabDialogState {
     pub tab_index: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConfirmationKind {
+    OpenDeleteSql,
+    ExecuteDestructiveSql,
+}
+
+pub struct ConfirmationDialogState {
+    pub title: String,
+    pub message: String,
+    pub sql: String,
+    pub kind: ConfirmationKind,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EditSnapshot {
     query: String,
@@ -189,6 +202,7 @@ pub struct App {
     pub finder: Option<FinderState>,
     pub save_dialog: Option<SaveDialogState>,
     pub close_tab_dialog: Option<CloseTabDialogState>,
+    pub confirmation_dialog: Option<ConfirmationDialogState>,
     pub saved_query_id: Option<i64>,
     pub saved_query_name: Option<String>,
     pub saved_query_snapshot: Option<String>,
@@ -242,6 +256,7 @@ impl App {
             finder: None,
             save_dialog: None,
             close_tab_dialog: None,
+            confirmation_dialog: None,
             saved_query_id: None,
             saved_query_name: None,
             saved_query_snapshot: None,
@@ -283,33 +298,26 @@ impl App {
                 self.focus = Focus::Editor;
             }
             Action::EnterNormalMode => self.mode = Mode::Normal,
-            Action::RunQuery
-                if self.connection == ConnectionState::Connected && !self.query_running =>
-            {
-                self.error = None;
-                self.result = None;
-                self.result_row = 0;
-                self.result_column = 0;
-                self.query_running = true;
-                let statement = crate::sql::statement::current(&self.query, self.cursor).to_owned();
-                if statement.is_empty() {
-                    self.query_running = false;
-                    self.error = Some("no SQL statement under the cursor".into());
-                } else if self.database.execute(statement).await.is_err() {
-                    self.query_running = false;
-                    self.error = Some("database worker is unavailable".into());
-                } else {
-                    self.running_statement =
-                        Some(crate::sql::statement::current(&self.query, self.cursor).to_owned());
-                }
-                self.focus = Focus::Results;
-            }
             Action::RunQuery => {
-                self.error = Some(if self.query_running {
-                    "a query is already running".into()
+                let statement = crate::sql::statement::current(&self.query, self.cursor).to_owned();
+                if self.connection != ConnectionState::Connected {
+                    self.error = Some("connect to PostgreSQL before running a query".into());
+                } else if self.query_running {
+                    self.error = Some("a query is already running".into());
+                } else if statement.is_empty() {
+                    self.error = Some("no SQL statement under the cursor".into());
+                } else if is_destructive_sql(&statement) {
+                    self.confirmation_dialog = Some(ConfirmationDialogState {
+                        title: "Confirm destructive SQL".into(),
+                        message:
+                            "This statement can permanently delete data. Review it before running."
+                                .into(),
+                        sql: statement,
+                        kind: ConfirmationKind::ExecuteDestructiveSql,
+                    });
                 } else {
-                    "connect to PostgreSQL before running a query".into()
-                });
+                    self.execute_statement(statement).await;
+                }
             }
             Action::Activate if self.focus == Focus::Explorer => {
                 if let Some(entry) = self
@@ -365,12 +373,27 @@ impl App {
             Action::Redo => self.redo(),
             Action::YankResultCell => self.yank_result_cell(),
             Action::YankResultRow => self.yank_result_row(),
-            Action::RequestDeleteResultRow => {
-                self.status_message = Some(
-                    "Delete blocked: safe primary-key detection and confirmation are not ready"
-                        .into(),
-                );
-            }
+            Action::EditResultCell => match self.update_sql_for_selected_cell() {
+                Ok(sql) => {
+                    self.open_scratch_tab(sql);
+                    self.status_message = Some(
+                        "Opened UPDATE in a new SQL tab; edit the SET value before running".into(),
+                    );
+                }
+                Err(message) => self.status_message = Some(message),
+            },
+            Action::RequestDeleteResultRow => match self.delete_sql_for_selected_row() {
+                Ok(sql) => {
+                    self.confirmation_dialog = Some(ConfirmationDialogState {
+                        title: "Prepare DELETE statement?".into(),
+                        message: "Mantra found the table primary key. Enter opens this SQL in a new tab; it does not execute it."
+                            .into(),
+                        sql,
+                        kind: ConfirmationKind::OpenDeleteSql,
+                    });
+                }
+                Err(message) => self.status_message = Some(message),
+            },
             Action::MoveLineStart => self.cursor = self.line_start(),
             Action::MoveFirstNonBlank => {
                 let start = self.line_start();
@@ -457,11 +480,28 @@ impl App {
             Action::OverlayBackspace => self.overlay_backspace(),
             Action::OverlayNext => self.overlay_move(1),
             Action::OverlayPrevious => self.overlay_move(-1),
-            Action::OverlayAccept => self.overlay_accept(),
+            Action::OverlayAccept => {
+                if let Some(dialog) = self.confirmation_dialog.take() {
+                    match dialog.kind {
+                        ConfirmationKind::OpenDeleteSql => {
+                            self.open_scratch_tab(dialog.sql);
+                            self.status_message = Some(
+                                "Opened DELETE in a new SQL tab; review before running".into(),
+                            );
+                        }
+                        ConfirmationKind::ExecuteDestructiveSql => {
+                            self.execute_statement(dialog.sql).await;
+                        }
+                    }
+                } else {
+                    self.overlay_accept();
+                }
+            }
             Action::OverlayCancel => {
                 self.finder = None;
                 self.save_dialog = None;
                 self.close_tab_dialog = None;
+                self.confirmation_dialog = None;
             }
             Action::ToggleHelp => self.help_visible = !self.help_visible,
             Action::FocusNext => {
@@ -923,7 +963,10 @@ impl App {
     }
 
     pub fn overlay_active(&self) -> bool {
-        self.finder.is_some() || self.save_dialog.is_some() || self.close_tab_dialog.is_some()
+        self.finder.is_some()
+            || self.save_dialog.is_some()
+            || self.close_tab_dialog.is_some()
+            || self.confirmation_dialog.is_some()
     }
 
     pub fn finder_matches(&self) -> Vec<usize> {
@@ -1357,6 +1400,67 @@ impl App {
         self.status_message = Some("Redid change".into());
     }
 
+    async fn execute_statement(&mut self, statement: String) {
+        self.error = None;
+        self.result = None;
+        self.result_row = 0;
+        self.result_column = 0;
+        self.query_running = true;
+        self.focus = Focus::Results;
+        self.running_statement = Some(statement.clone());
+        if self.database.execute(statement).await.is_err() {
+            self.query_running = false;
+            self.running_statement = None;
+            self.error = Some("database worker is unavailable".into());
+        }
+    }
+
+    fn update_sql_for_selected_cell(&self) -> Result<String, String> {
+        let (source, row) = self.selected_result_target()?;
+        let value = row
+            .get(self.result_column)
+            .ok_or_else(|| "Selected result cell is unavailable".to_owned())?;
+        Ok(format!(
+            "UPDATE {}.{}\nSET {} = {}\nWHERE {};",
+            quote_identifier(&source.schema),
+            quote_identifier(&source.table),
+            quote_identifier(&source.column),
+            sql_value(value),
+            primary_key_predicate(source, row)?,
+        ))
+    }
+
+    fn delete_sql_for_selected_row(&self) -> Result<String, String> {
+        let (source, row) = self.selected_result_target()?;
+        Ok(format!(
+            "DELETE FROM {}.{}\nWHERE {};",
+            quote_identifier(&source.schema),
+            quote_identifier(&source.table),
+            primary_key_predicate(source, row)?,
+        ))
+    }
+
+    fn selected_result_target(
+        &self,
+    ) -> Result<(&crate::database::ResultColumnSource, &[String]), String> {
+        let result = self
+            .result
+            .as_ref()
+            .ok_or_else(|| "No query result is available".to_owned())?;
+        let row = result
+            .rows
+            .get(self.result_row)
+            .ok_or_else(|| "Selected result row is unavailable".to_owned())?;
+        let source = result
+            .sources
+            .get(self.result_column)
+            .and_then(Option::as_ref)
+            .ok_or_else(|| {
+                "Cannot identify this cell's source table and complete primary key".to_owned()
+            })?;
+        Ok((source, row))
+    }
+
     fn yank_result_cell(&mut self) {
         let Some(value) = self
             .result
@@ -1392,6 +1496,48 @@ impl App {
             }
         }
     }
+}
+
+fn primary_key_predicate(
+    source: &crate::database::ResultColumnSource,
+    row: &[String],
+) -> Result<String, String> {
+    source
+        .primary_key
+        .iter()
+        .map(|key| {
+            let value = row
+                .get(key.result_index)
+                .ok_or_else(|| format!("Primary-key column '{}' is unavailable", key.name))?;
+            if value == "NULL" {
+                return Err(format!("Primary-key column '{}' is NULL", key.name));
+            }
+            Ok(format!(
+                "{} = {}",
+                quote_identifier(&key.name),
+                sql_value(value)
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(|predicates| predicates.join(" AND "))
+}
+
+fn quote_identifier(identifier: &str) -> String {
+    format!("\"{}\"", identifier.replace('"', "\"\""))
+}
+
+fn sql_value(value: &str) -> String {
+    if value == "NULL" {
+        "NULL".into()
+    } else {
+        format!("'{}'", value.replace('\'', "''"))
+    }
+}
+
+fn is_destructive_sql(sql: &str) -> bool {
+    sql.split_whitespace()
+        .next()
+        .is_some_and(|keyword| keyword.eq_ignore_ascii_case("DELETE"))
 }
 
 fn copy_to_clipboard(value: &str) -> Result<(), String> {
@@ -1544,6 +1690,70 @@ mod tests {
         app.update(Action::PreviousQueryTab).await;
         app.update(Action::Undo).await;
         assert_eq!(app.query, "");
+    }
+
+    fn editable_result() -> QueryResult {
+        let source = crate::database::ResultColumnSource {
+            schema: "public".into(),
+            table: "messages".into(),
+            column: "content".into(),
+            primary_key: vec![crate::database::ResultKeyColumn {
+                name: "id".into(),
+                result_index: 0,
+            }],
+        };
+        QueryResult {
+            columns: vec!["id".into(), "content".into()],
+            rows: vec![vec!["4".into(), "O'Reilly".into()]],
+            elapsed: Duration::from_millis(1),
+            sources: vec![None, Some(source)],
+        }
+    }
+
+    #[tokio::test]
+    async fn result_edit_opens_primary_key_scoped_update_sql() {
+        let mut app = app();
+        app.result = Some(editable_result());
+        app.result_column = 1;
+
+        app.update(Action::EditResultCell).await;
+
+        assert_eq!(
+            app.query,
+            "UPDATE \"public\".\"messages\"\nSET \"content\" = 'O''Reilly'\nWHERE \"id\" = '4';"
+        );
+        assert_eq!(app.query_tabs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn result_delete_requires_confirmation_then_opens_sql() {
+        let mut app = app();
+        app.result = Some(editable_result());
+        app.result_column = 1;
+
+        app.update(Action::RequestDeleteResultRow).await;
+        assert!(app.confirmation_dialog.is_some());
+        assert_eq!(app.query_tabs.len(), 1);
+
+        app.update(Action::OverlayAccept).await;
+        assert_eq!(
+            app.query,
+            "DELETE FROM \"public\".\"messages\"\nWHERE \"id\" = '4';"
+        );
+        assert_eq!(app.query_tabs.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn running_generated_delete_requires_second_confirmation() {
+        let mut app = app();
+        app.connection = ConnectionState::Connected;
+        app.query = "DELETE FROM \"public\".\"messages\" WHERE \"id\" = '4';".into();
+        app.cursor = 0;
+
+        app.update(Action::RunQuery).await;
+
+        assert!(app.confirmation_dialog.is_some());
+        assert!(!app.query_running);
     }
 
     #[tokio::test]
@@ -1746,6 +1956,7 @@ mod tests {
             columns: vec!["now".into()],
             rows: vec![vec!["2026-08-16".into()]],
             elapsed: Duration::from_millis(12),
+            sources: vec![None],
         }));
 
         let history = app.storage.history("project_db", 10).unwrap();

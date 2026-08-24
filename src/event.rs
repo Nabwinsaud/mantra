@@ -107,6 +107,7 @@ pub fn map_key_event(
                 *sequence = Some('d');
                 None
             }
+            KeyCode::Char('e') => Some(Action::EditResultCell),
             KeyCode::Left | KeyCode::Char('h') => Some(Action::MoveLeft),
             KeyCode::Down | KeyCode::Char('j') => Some(Action::MoveDown),
             KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
@@ -402,6 +403,17 @@ mod tests {
                 false,
             ),
             Some(Action::YankResultRow)
+        );
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Results,
+                false,
+                false,
+            ),
+            Some(Action::EditResultCell)
         );
     }
 
