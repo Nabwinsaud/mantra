@@ -292,8 +292,13 @@ fn editor_areas(area: Rect) -> (Rect, Rect) {
         horizontal: 1,
         vertical: 1,
     });
-    let sections = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).split(inner);
-    (sections[0], sections[1])
+    let sections = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .split(inner);
+    (sections[0], sections[2])
 }
 
 fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
@@ -1265,4 +1270,17 @@ fn centered_fixed(width: u16, height: u16, area: Rect) -> Rect {
         width,
         height,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn editor_content_has_one_blank_row_below_tabs() {
+        let (tabs, sql) = editor_areas(Rect::new(0, 0, 80, 20));
+
+        assert_eq!(tabs.y, 1);
+        assert_eq!(sql.y, tabs.bottom() + 1);
+    }
 }
