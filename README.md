@@ -68,6 +68,7 @@ The connection URL is used only in memory and is never displayed or logged.
 - `yy` in Table Inspector: copy the complete table schema as shareable Markdown
 - `ya` in Table Inspector: copy the schema with an AI prompt requesting 20 sample rows
 - `Tab` in INSERT mode: accept the highlighted SQL completion
+- `Ctrl-Space` in INSERT mode: show context-aware columns or relations
 - `Ctrl-n` / `Ctrl-p`: select the next / previous completion
 - `Enter` in INSERT mode: accept completion, or insert a newline when none is shown
 - `Ctrl-Enter` or `<leader>r`: run the statement under the cursor and focus Results
@@ -83,6 +84,7 @@ The connection URL is used only in memory and is never displayed or logged.
 - `<leader>bn` / `<leader>bp`: move to the next / previous SQL buffer tab
 - `o`: open a new line below and enter INSERT mode
 - `u` / `Ctrl-r` in the NORMAL SQL editor: undo / redo changes in the current buffer
+- `v` in the NORMAL SQL editor: enter VISUAL mode; move to select, then `y` copy or `d` delete
 - `dd`: delete the current line
 - `a` / `A`: append after cursor / at line end
 - `I`: insert at the first non-blank character
@@ -96,11 +98,12 @@ Execution is cursor-aware: in a buffer containing several semicolon-separated st
 `Ctrl-Enter` and `<leader>r` execute only the statement containing the cursor. Semicolons inside SQL
 strings and comments are handled by the PostgreSQL tokenizer.
 
-The SQL editor uses PostgreSQL-aware tokenization for syntax colors. Completion combines SQL
-keywords with schemas, tables, columns, `schema.table`, and `table.column` names loaded from the
-connected database, ranked with Nucleo's fuzzy matcher. SQL aliases are scoped to their source
-table, so `FROM user_roles ur ... ur.` completes as `ur."userId"`, not an unrelated table's
-column. Mixed-case PostgreSQL identifiers are quoted automatically to prevent case folding.
+The SQL editor uses PostgreSQL-aware tokenization for syntax colors. Completion is scoped to the
+relations referenced by the current statement—even when its `FROM` clause is after the cursor—so
+`SELECT ... FROM tool_calls` never suggests columns from `messages`. Press `Ctrl-Space` to open
+completion explicitly. SQL aliases are scoped to their source table, so
+`FROM user_roles ur ... ur.` completes as `ur."userId"`. Mixed-case PostgreSQL identifiers are
+quoted automatically to prevent case folding.
 
 The editor includes a line-number gutter, current-line highlighting, cursor-following vertical
 scrolling, mode-colored statusline, and contextual which-key panels for leader and multi-key

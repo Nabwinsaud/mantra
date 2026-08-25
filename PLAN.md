@@ -99,8 +99,10 @@ turning a table view into an unreviewable mutation tool.
 - [ ] Add terminal capability detection and reliable fallbacks for Ctrl/Alt shortcuts
 - [ ] Make tmux pane-navigation conflicts discoverable in the help screen
 - [ ] Improve completion ranking, alias scope, function signatures, and JOIN suggestions
+- [x] Scope column completion to relations in the current statement and support `Ctrl-Space`
 - [ ] Add formatting and diagnostics as opt-in editor commands
 - [x] Add per-buffer undo/redo history (`u` / `Ctrl-r`)
+- [x] Add character-wise VISUAL selection with yank and delete
 - [ ] Add search/replace and multiple selections incrementally
 - [ ] Improve wide-result rendering with column pinning and horizontal scroll indicators
 - [ ] Add CSV, JSON, Markdown, and SQL export commands

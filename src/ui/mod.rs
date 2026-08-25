@@ -215,7 +215,12 @@ fn draw_editor(frame: &mut Frame, area: Rect, app: &App) {
         })
         .collect::<Vec<_>>();
     frame.render_widget(Paragraph::new(Line::from(tabs)), tabs_area);
-    let highlighted = crate::sql::highlight::lines(&app.query);
+    let mut highlighted = crate::sql::highlight::lines(&app.query);
+    if app.mode == Mode::Visual
+        && let Some(range) = app.visual_selection_range()
+    {
+        apply_visual_selection(&mut highlighted, range);
+    }
     let line_count = highlighted.len().max(1);
     let gutter_width = line_count.to_string().len().max(2);
     let visible_height = sql_area.height.max(1) as usize;
@@ -299,6 +304,29 @@ fn editor_areas(area: Rect) -> (Rect, Rect) {
     ])
     .split(inner);
     (sections[0], sections[2])
+}
+
+fn apply_visual_selection(lines: &mut [Line<'static>], range: std::ops::Range<usize>) {
+    let mut byte_index = 0;
+    for line in lines {
+        let mut rendered = Vec::new();
+        for span in std::mem::take(&mut line.spans) {
+            for character in span.content.chars() {
+                let selected = range.contains(&byte_index);
+                rendered.push(Span::styled(
+                    character.to_string(),
+                    if selected {
+                        span.style.bg(Color::Blue).add_modifier(Modifier::BOLD)
+                    } else {
+                        span.style
+                    },
+                ));
+                byte_index += character.len_utf8();
+            }
+        }
+        line.spans = rendered;
+        byte_index += 1;
+    }
 }
 
 fn draw_results(frame: &mut Frame, area: Rect, app: &App) {
@@ -615,6 +643,7 @@ fn draw_completion(frame: &mut Frame, editor_area: Rect, app: &App) {
         app.cursor,
         &app.completion_items,
         &app.relation_items,
+        app.completion_forced,
     );
     if candidates.is_empty() {
         return;
@@ -636,6 +665,7 @@ fn draw_completion(frame: &mut Frame, editor_area: Rect, app: &App) {
         .unwrap_or(10)
         .max(18) as u16
         + 4;
+    let width = width.max(50);
     let height = candidates.len() as u16 + 2;
     let x = editor_area
         .x
@@ -664,7 +694,7 @@ fn draw_completion(frame: &mut Frame, editor_area: Rect, app: &App) {
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::default()
-                .title(" Completion · Ctrl-n/p select · Enter accept ")
+                .title(" Completion · C-Space open · C-n/p move · Enter ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Cyan)),
         ),
@@ -702,6 +732,8 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
         "h/j/k/l Navigate  •  y/yy Copy  •  e Edit SQL  •  dd Delete SQL"
     } else if app.mode == Mode::Insert {
         "Esc Normal  •  type to edit"
+    } else if app.mode == Mode::Visual {
+        "h/j/k/l Select  •  y Copy  •  d Delete  •  Esc Cancel"
     } else {
         "1 Explorer  2 SQL  3 Results  •  u Undo  •  Ctrl-r Redo  •  Space ff/fh Find"
     };
@@ -719,10 +751,10 @@ fn draw_status(frame: &mut Frame, area: Rect, app: &App) {
                 mode,
                 Style::default()
                     .fg(Color::Black)
-                    .bg(if app.mode == Mode::Insert {
-                        Color::Green
-                    } else {
-                        Color::LightBlue
+                    .bg(match app.mode {
+                        Mode::Normal => Color::LightBlue,
+                        Mode::Insert => Color::Green,
+                        Mode::Visual => Color::Magenta,
                     })
                     .add_modifier(Modifier::BOLD),
             ),
@@ -1166,6 +1198,8 @@ fn draw_help(frame: &mut Frame) {
                 .add_modifier(Modifier::BOLD),
         ),
         key_line("h j k l", "Move left, down, up, right in NORMAL mode"),
+        key_line("v", "Enter VISUAL mode and select text with movement keys"),
+        key_line("y / d", "Copy / delete the VISUAL selection"),
         key_line("o", "Open a new line below and enter INSERT mode"),
         key_line("O", "Open a new line above and enter INSERT mode"),
         key_line("dd", "Delete the current SQL line"),
@@ -1190,6 +1224,7 @@ fn draw_help(frame: &mut Frame) {
         key_line("Enter", "Expand/collapse selected Explorer node"),
         key_line("h j k l", "Move the selected cell in Results"),
         key_line("Tab (INSERT)", "Accept highlighted SQL completion"),
+        key_line("Ctrl-Space", "Show context-aware SQL completion"),
         key_line("Ctrl-n / Ctrl-p", "Select next / previous completion"),
         key_line(
             "Enter (INSERT)",

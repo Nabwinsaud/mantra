@@ -20,6 +20,7 @@ use nucleo_matcher::{
 pub enum Mode {
     Normal,
     Insert,
+    Visual,
 }
 
 impl Mode {
@@ -27,6 +28,7 @@ impl Mode {
         match self {
             Self::Normal => "NORMAL",
             Self::Insert => "INSERT",
+            Self::Visual => "VISUAL",
         }
     }
 }
@@ -184,6 +186,7 @@ pub struct App {
     pub database_name: Option<String>,
     pub query: String,
     pub cursor: usize,
+    pub visual_anchor: Option<usize>,
     pub result: Option<QueryResult>,
     pub error: Option<String>,
     pub query_running: bool,
@@ -201,6 +204,7 @@ pub struct App {
     pub completion_items: Vec<String>,
     pub relation_items: Vec<String>,
     pub completion_index: usize,
+    pub completion_forced: bool,
     pub inspector: Option<TableDetails>,
     pub inspector_loading: bool,
     pub inspector_section: InspectorSection,
@@ -239,6 +243,7 @@ impl App {
             database_name: None,
             query: query.clone(),
             cursor: 9,
+            visual_anchor: None,
             result: None,
             error: None,
             query_running: false,
@@ -256,6 +261,7 @@ impl App {
             completion_items: Vec::new(),
             relation_items: Vec::new(),
             completion_index: 0,
+            completion_forced: false,
             inspector: None,
             inspector_loading: false,
             inspector_section: InspectorSection::Columns,
@@ -301,9 +307,21 @@ impl App {
             Action::Quit => self.should_quit = true,
             Action::EnterInsertMode => {
                 self.mode = Mode::Insert;
+                self.visual_anchor = None;
                 self.focus = Focus::Editor;
             }
-            Action::EnterNormalMode => self.mode = Mode::Normal,
+            Action::EnterNormalMode => {
+                self.mode = Mode::Normal;
+                self.visual_anchor = None;
+                self.completion_forced = false;
+            }
+            Action::EnterVisualMode => {
+                self.mode = Mode::Visual;
+                self.visual_anchor = Some(self.cursor);
+                self.focus = Focus::Editor;
+            }
+            Action::DeleteSelection => self.delete_visual_selection(),
+            Action::YankSelection => self.yank_visual_selection(),
             Action::RunQuery => {
                 let statement = crate::sql::statement::current(&self.query, self.cursor).to_owned();
                 if self.connection != ConnectionState::Connected {
@@ -617,6 +635,7 @@ impl App {
                     self.cursor,
                     &self.completion_items,
                     &self.relation_items,
+                    self.completion_forced,
                 );
                 let selected = self
                     .completion_index
@@ -628,11 +647,17 @@ impl App {
                     self.query.replace_range(start..self.cursor, candidate);
                     self.cursor = start + candidate.len();
                     self.completion_index = 0;
+                    self.completion_forced = false;
                 } else {
+                    self.completion_forced = false;
                     self.record_edit();
                     self.query.insert(self.cursor, '\n');
                     self.cursor += 1;
                 }
+            }
+            Action::TriggerCompletion => {
+                self.completion_forced = true;
+                self.completion_index = 0;
             }
             Action::NextCompletion => {
                 let count = completion::candidates(
@@ -640,6 +665,7 @@ impl App {
                     self.cursor,
                     &self.completion_items,
                     &self.relation_items,
+                    self.completion_forced,
                 )
                 .len();
                 if count > 0 {
@@ -652,6 +678,7 @@ impl App {
                     self.cursor,
                     &self.completion_items,
                     &self.relation_items,
+                    self.completion_forced,
                 )
                 .len();
                 if count > 0 {
@@ -730,6 +757,10 @@ impl App {
                     self.move_vertical(1);
                 }
             }
+        }
+        if self.mode == Mode::Visual && self.focus != Focus::Editor {
+            self.mode = Mode::Normal;
+            self.visual_anchor = None;
         }
     }
 
@@ -844,6 +875,7 @@ impl App {
         self.undo_stack = tab.undo_stack;
         self.redo_stack = tab.redo_stack;
         self.mode = Mode::Normal;
+        self.visual_anchor = None;
         self.focus = Focus::Editor;
         self.completion_index = 0;
     }
@@ -906,6 +938,7 @@ impl App {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.mode = Mode::Normal;
+        self.visual_anchor = None;
         self.focus = Focus::Editor;
         self.completion_index = 0;
         self.status_message = Some(format!("Opened '{}'", saved.name));
@@ -933,6 +966,7 @@ impl App {
         self.undo_stack.clear();
         self.redo_stack.clear();
         self.mode = Mode::Normal;
+        self.visual_anchor = None;
         self.focus = Focus::Editor;
         self.completion_index = 0;
         self.persist_query_tab_session();
@@ -1462,6 +1496,52 @@ impl App {
         self.status_message = Some("Redid change".into());
     }
 
+    pub fn visual_selection_range(&self) -> Option<std::ops::Range<usize>> {
+        let anchor = self.visual_anchor?;
+        if self.query.is_empty() {
+            return None;
+        }
+        let start = anchor.min(self.cursor).min(self.query.len());
+        if start == self.query.len() {
+            return None;
+        }
+        let current = anchor.max(self.cursor).min(self.query.len());
+        let end = if current < self.query.len() {
+            current + self.query[current..].chars().next()?.len_utf8()
+        } else {
+            self.query.len()
+        };
+        (start < end).then_some(start..end)
+    }
+
+    fn delete_visual_selection(&mut self) {
+        let Some(range) = self.visual_selection_range() else {
+            self.mode = Mode::Normal;
+            self.visual_anchor = None;
+            return;
+        };
+        self.record_edit();
+        self.query.replace_range(range.clone(), "");
+        self.cursor = range.start.min(self.query.len());
+        self.mode = Mode::Normal;
+        self.visual_anchor = None;
+        self.completion_index = 0;
+        self.status_message = Some("Deleted selection".into());
+    }
+
+    fn yank_visual_selection(&mut self) {
+        let Some(range) = self.visual_selection_range() else {
+            self.mode = Mode::Normal;
+            self.visual_anchor = None;
+            return;
+        };
+        let value = self.query[range.clone()].to_owned();
+        self.cursor = range.start;
+        self.mode = Mode::Normal;
+        self.visual_anchor = None;
+        self.finish_yank(&value, "selection");
+    }
+
     async fn execute_statement(&mut self, statement: String) {
         self.error = None;
         self.result = None;
@@ -1839,6 +1919,28 @@ mod tests {
 
         app.update(Action::Redo).await;
         assert_eq!((app.query.as_str(), app.cursor), ("λx", 3));
+    }
+
+    #[tokio::test]
+    async fn visual_delete_removes_selection_and_can_be_undone() {
+        let mut app = app();
+        app.query = "SELECT λvalue;".into();
+        app.cursor = 7;
+        app.undo_stack.clear();
+
+        app.update(Action::EnterVisualMode).await;
+        for _ in 0..5 {
+            app.update(Action::MoveRight).await;
+        }
+        assert_eq!(&app.query[app.visual_selection_range().unwrap()], "λvalue");
+
+        app.update(Action::DeleteSelection).await;
+        assert_eq!(app.query, "SELECT ;");
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.visual_anchor, None);
+
+        app.update(Action::Undo).await;
+        assert_eq!(app.query, "SELECT λvalue;");
     }
 
     #[tokio::test]

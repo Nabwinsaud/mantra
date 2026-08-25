@@ -58,6 +58,17 @@ pub fn map_key_event(
         };
     }
 
+    if mode == Mode::Normal {
+        if *sequence == Some(' ') && key.code == KeyCode::Char('e') {
+            *sequence = None;
+            return Some(Action::ToggleExplorer);
+        }
+        if key.code == KeyCode::Char(' ') {
+            *sequence = Some(' ');
+            return None;
+        }
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('s') {
         return Some(Action::SaveQuery);
     }
@@ -68,6 +79,7 @@ pub fn map_key_event(
 
     if mode == Mode::Insert && key.modifiers.contains(KeyModifiers::CONTROL) {
         return match key.code {
+            KeyCode::Char(' ') => Some(Action::TriggerCompletion),
             KeyCode::Char('n') => Some(Action::NextCompletion),
             KeyCode::Char('p') => Some(Action::PreviousCompletion),
             _ => None,
@@ -181,6 +193,25 @@ pub fn map_key_event(
         };
     }
 
+    if mode == Mode::Visual {
+        *sequence = None;
+        return match key.code {
+            KeyCode::Esc | KeyCode::Char('v') => Some(Action::EnterNormalMode),
+            KeyCode::Char('d') | KeyCode::Char('x') => Some(Action::DeleteSelection),
+            KeyCode::Char('y') => Some(Action::YankSelection),
+            KeyCode::Left | KeyCode::Char('h') => Some(Action::MoveLeft),
+            KeyCode::Down | KeyCode::Char('j') => Some(Action::MoveDown),
+            KeyCode::Up | KeyCode::Char('k') => Some(Action::MoveUp),
+            KeyCode::Right | KeyCode::Char('l') => Some(Action::MoveRight),
+            KeyCode::Char('w') => Some(Action::MoveWordForward),
+            KeyCode::Char('b') => Some(Action::MoveWordBackward),
+            KeyCode::Char('e') => Some(Action::MoveWordEnd),
+            KeyCode::Char('0') => Some(Action::MoveLineStart),
+            KeyCode::Char('$') => Some(Action::MoveLineEnd),
+            _ => None,
+        };
+    }
+
     if let Some(pending) = sequence.take() {
         if pending == ' ' && key.code == KeyCode::Char('f') {
             *sequence = Some('f');
@@ -216,6 +247,7 @@ pub fn map_key_event(
             None
         }
         KeyCode::Char('i') => Some(Action::EnterInsertMode),
+        KeyCode::Char('v') => Some(Action::EnterVisualMode),
         KeyCode::Char('u') => Some(Action::Undo),
         KeyCode::Char('o') => Some(Action::OpenLineBelow),
         KeyCode::Char('O') => Some(Action::OpenLineAbove),
@@ -304,6 +336,73 @@ mod tests {
     }
 
     #[test]
+    fn visual_mode_maps_selection_commands() {
+        let mut sequence = None;
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::EnterVisualMode)
+        );
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Visual,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::DeleteSelection)
+        );
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Visual,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::YankSelection)
+        );
+    }
+
+    #[test]
+    fn leader_e_toggles_explorer_from_every_normal_focus() {
+        for focus in [Focus::Explorer, Focus::Editor, Focus::Results] {
+            let mut sequence = None;
+            assert_eq!(
+                map_key_event(
+                    KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE),
+                    &mut sequence,
+                    Mode::Normal,
+                    focus,
+                    false,
+                    false,
+                ),
+                None
+            );
+            assert_eq!(
+                map_key_event(
+                    KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE),
+                    &mut sequence,
+                    Mode::Normal,
+                    focus,
+                    false,
+                    false,
+                ),
+                Some(Action::ToggleExplorer)
+            );
+        }
+    }
+
+    #[test]
     fn control_n_selects_next_completion() {
         let mut sequence = None;
         assert_eq!(
@@ -316,6 +415,22 @@ mod tests {
                 false,
             ),
             Some(Action::NextCompletion)
+        );
+    }
+
+    #[test]
+    fn control_space_triggers_completion() {
+        let mut sequence = None;
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char(' '), KeyModifiers::CONTROL),
+                &mut sequence,
+                Mode::Insert,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::TriggerCompletion)
         );
     }
 
