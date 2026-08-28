@@ -457,8 +457,10 @@ fn decode_numeric(raw: &[u8]) -> Option<String> {
     }
 
     let digits = raw[8..]
-        .chunks_exact(2)
-        .map(|bytes| u16::from_be_bytes([bytes[0], bytes[1]]))
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|bytes| u16::from_be_bytes(*bytes))
         .collect::<Vec<_>>();
     if digits.iter().any(|digit| *digit > 9_999) {
         return None;
