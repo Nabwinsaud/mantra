@@ -91,6 +91,12 @@ pub enum DatabaseEvent {
     },
     ConnectionFailed(String),
     QueryFinished(QueryResult),
+    TransactionFinished {
+        elapsed: Duration,
+        completion_items: Vec<String>,
+        relation_items: Vec<String>,
+        catalog: DatabaseCatalog,
+    },
     QueryFailed(String),
     TableInspected(TableDetails),
     TableInspectionFailed(String),
@@ -99,6 +105,7 @@ pub enum DatabaseEvent {
 enum DatabaseCommand {
     Connect(String),
     Execute(String),
+    ExecuteTransaction(String),
     InspectTable { schema: String, table: String },
 }
 
@@ -191,6 +198,64 @@ impl DatabaseService {
                             }
                         }
                     }
+                    DatabaseCommand::ExecuteTransaction(sql) => {
+                        let Some(active_client) = client.as_mut() else {
+                            let _ = events_tx
+                                .send(DatabaseEvent::QueryFailed("not connected".into()))
+                                .await;
+                            continue;
+                        };
+                        let started = Instant::now();
+                        let transaction = match active_client.transaction().await {
+                            Ok(transaction) => transaction,
+                            Err(error) => {
+                                let _ = events_tx
+                                    .send(DatabaseEvent::QueryFailed(safe_error(&error)))
+                                    .await;
+                                continue;
+                            }
+                        };
+                        match transaction.batch_execute(&sql).await {
+                            Ok(()) => match transaction.commit().await {
+                                Ok(()) => {
+                                    let elapsed = started.elapsed();
+                                    let (completion_items, relation_items) =
+                                        load_completion_items(active_client).await;
+                                    let catalog = load_catalog(active_client).await;
+                                    let _ = events_tx
+                                        .send(DatabaseEvent::TransactionFinished {
+                                            elapsed,
+                                            completion_items,
+                                            relation_items,
+                                            catalog,
+                                        })
+                                        .await;
+                                }
+                                Err(error) => {
+                                    let _ = events_tx
+                                        .send(DatabaseEvent::QueryFailed(format!(
+                                            "Transaction was not committed: {}",
+                                            safe_error(&error)
+                                        )))
+                                        .await;
+                                }
+                            },
+                            Err(error) => {
+                                let message = safe_error(&error);
+                                let rollback_error = transaction.rollback().await.err();
+                                let message = rollback_error.map_or_else(
+                                    || format!("Transaction rolled back: {message}"),
+                                    |rollback_error| {
+                                        format!(
+                                            "Transaction failed: {message}; rollback also failed: {}",
+                                            safe_error(&rollback_error)
+                                        )
+                                    },
+                                );
+                                let _ = events_tx.send(DatabaseEvent::QueryFailed(message)).await;
+                            }
+                        }
+                    }
                     DatabaseCommand::InspectTable { schema, table } => {
                         let Some(active_client) = client.as_ref() else {
                             let _ = events_tx
@@ -232,6 +297,13 @@ impl DatabaseService {
     pub async fn execute(&self, sql: String) -> Result<(), mpsc::error::SendError<()>> {
         self.commands
             .send(DatabaseCommand::Execute(sql))
+            .await
+            .map_err(|_| mpsc::error::SendError(()))
+    }
+
+    pub async fn execute_transaction(&self, sql: String) -> Result<(), mpsc::error::SendError<()>> {
+        self.commands
+            .send(DatabaseCommand::ExecuteTransaction(sql))
             .await
             .map_err(|_| mpsc::error::SendError(()))
     }

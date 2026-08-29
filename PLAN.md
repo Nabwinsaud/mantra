@@ -10,6 +10,7 @@ already exists; unchecked items are deliberately still work.
 - [x] Rust 2024 application with a responsive Ratatui/Crossterm event loop
 - [x] PostgreSQL connection and asynchronous query execution
 - [x] Cursor-aware execution for the statement under the cursor
+- [x] Atomic whole-buffer transaction scripts with automatic rollback and schema refresh
 - [x] Result table with row/column navigation and PostgreSQL value rendering
 - [x] Explorer with lazy schema, table, view, and function loading
 - [x] Table inspector with columns, constraints, indexes, and storage details

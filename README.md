@@ -72,6 +72,7 @@ The connection URL is used only in memory and is never displayed or logged.
 - `Ctrl-n` / `Ctrl-p`: select the next / previous completion
 - `Enter` in INSERT mode: accept completion, or insert a newline when none is shown
 - `Ctrl-Enter` or `<leader>r`: run the statement under the cursor and focus Results
+- `Ctrl-Shift-Enter` or `<leader>R`: run the complete buffer in one atomic transaction
 - `Ctrl-s`: save the current query; the first save asks for a name
 - `Ctrl-n` in the NORMAL SQL editor, or `<leader>n`: open a new empty query tab
 - `<leader>bd`: close the current tab after confirmation without deleting its saved query
@@ -97,6 +98,26 @@ The connection URL is used only in memory and is never displayed or logged.
 Execution is cursor-aware: in a buffer containing several semicolon-separated statements,
 `Ctrl-Enter` and `<leader>r` execute only the statement containing the cursor. Semicolons inside SQL
 strings and comments are handled by the PostgreSQL tokenizer.
+
+To run a migration or seed script atomically, write normal semicolon-separated SQL without manual
+transaction commands:
+
+```sql
+CREATE TABLE projects (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    name text NOT NULL
+);
+
+INSERT INTO projects (name)
+VALUES ('Mantra'), ('Atlas');
+```
+
+Press `Ctrl-Shift-Enter` or `<leader>R`. Mantra starts the transaction, executes the complete
+buffer, commits only when every statement succeeds, and rolls back everything on the first error.
+Do not add `BEGIN`, `COMMIT`, or `ROLLBACK`; transaction scripts reject those commands to prevent an
+accidental early commit. Successful scripts refresh the Explorer and completion metadata, so newly
+created tables are available immediately. Run a final `SELECT` separately with `Ctrl-Enter` when
+you want a result grid.
 
 The SQL editor uses PostgreSQL-aware tokenization for syntax colors. Completion is scoped to the
 relations referenced by the current statement—even when its `FROM` clause is after the cursor—so

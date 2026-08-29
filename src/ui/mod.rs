@@ -780,6 +780,7 @@ fn draw_which_key(frame: &mut Frame, app: &App) {
             &[
                 ("n", "new query"),
                 ("r", "run statement"),
+                ("R", "run buffer transaction"),
                 ("e", "toggle explorer"),
                 ("f", "+find"),
                 ("b", "+buffer"),
@@ -1175,6 +1176,10 @@ fn draw_help(frame: &mut Frame) {
         key_line("i", "Enter INSERT mode and edit SQL"),
         key_line("Esc", "Return to NORMAL mode / close this window"),
         key_line("Ctrl-Enter / Space r", "Run statement under cursor"),
+        key_line(
+            "Ctrl-Shift-Enter / Space R",
+            "Run complete buffer in one transaction",
+        ),
         key_line("Ctrl-s", "Save or update the current query"),
         key_line(
             "Ctrl-n / Space n",

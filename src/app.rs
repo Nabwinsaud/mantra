@@ -146,6 +146,7 @@ pub struct CloseTabDialogState {
 pub enum ConfirmationKind {
     OpenDeleteSql,
     ExecuteDestructiveSql,
+    ExecuteDestructiveTransaction,
 }
 
 pub struct ConfirmationDialogState {
@@ -343,6 +344,32 @@ impl App {
                     self.execute_statement(statement).await;
                 }
             }
+            Action::RunBufferTransaction => {
+                let script = self.query.trim().to_owned();
+                if self.connection != ConnectionState::Connected {
+                    self.error = Some("connect to PostgreSQL before running a transaction".into());
+                } else if self.query_running {
+                    self.error = Some("a query is already running".into());
+                } else if script.is_empty() {
+                    self.error = Some("the SQL buffer is empty".into());
+                } else if contains_transaction_control(&script) {
+                    self.error = Some(
+                        "Remove BEGIN/COMMIT/ROLLBACK: Mantra wraps the complete buffer in one transaction"
+                            .into(),
+                    );
+                    self.focus = Focus::Results;
+                } else if contains_destructive_statement(&script) {
+                    self.confirmation_dialog = Some(ConfirmationDialogState {
+                        title: "Confirm destructive transaction".into(),
+                        message: "The complete buffer will run atomically and commit destructive SQL only if every statement succeeds."
+                            .into(),
+                        sql: script,
+                        kind: ConfirmationKind::ExecuteDestructiveTransaction,
+                    });
+                } else {
+                    self.execute_transaction(script).await;
+                }
+            }
             Action::Activate if self.focus == Focus::Explorer => {
                 if let Some(entry) = self
                     .explorer_entries()
@@ -517,6 +544,9 @@ impl App {
                         }
                         ConfirmationKind::ExecuteDestructiveSql => {
                             self.execute_statement(dialog.sql).await;
+                        }
+                        ConfirmationKind::ExecuteDestructiveTransaction => {
+                            self.execute_transaction(dialog.sql).await;
                         }
                     }
                 } else {
@@ -805,6 +835,39 @@ impl App {
                 self.result_row = 0;
                 self.result_column = 0;
                 self.error = None;
+            }
+            DatabaseEvent::TransactionFinished {
+                elapsed,
+                completion_items,
+                relation_items,
+                catalog,
+            } => {
+                self.query_running = false;
+                if let Some(statement) = self.running_statement.take()
+                    && let Some(database_name) = self.database_name.as_deref()
+                {
+                    let _ = self.storage.record_history(
+                        database_name,
+                        &statement,
+                        true,
+                        Some(elapsed.as_millis() as i64),
+                        None,
+                    );
+                }
+                self.completion_items = completion_items;
+                self.relation_items = relation_items;
+                self.catalog = catalog;
+                self.result = Some(QueryResult {
+                    columns: vec!["transaction".into()],
+                    rows: vec![vec!["committed atomically".into()]],
+                    elapsed,
+                    sources: vec![None],
+                });
+                self.result_row = 0;
+                self.result_column = 0;
+                self.error = None;
+                self.status_message =
+                    Some("Transaction committed; schema metadata refreshed".into());
             }
             DatabaseEvent::QueryFailed(message) => {
                 self.query_running = false;
@@ -1557,6 +1620,21 @@ impl App {
         }
     }
 
+    async fn execute_transaction(&mut self, script: String) {
+        self.error = None;
+        self.result = None;
+        self.result_row = 0;
+        self.result_column = 0;
+        self.query_running = true;
+        self.focus = Focus::Results;
+        self.running_statement = Some(script.clone());
+        if self.database.execute_transaction(script).await.is_err() {
+            self.query_running = false;
+            self.running_statement = None;
+            self.error = Some("database worker is unavailable".into());
+        }
+    }
+
     fn update_sql_for_selected_cell(&self) -> Result<String, String> {
         let (source, row) = self.selected_result_target()?;
         let value = row
@@ -1785,6 +1863,57 @@ fn is_destructive_sql(sql: &str) -> bool {
     sql.split_whitespace()
         .next()
         .is_some_and(|keyword| keyword.eq_ignore_ascii_case("DELETE"))
+}
+
+fn contains_transaction_control(sql: &str) -> bool {
+    statement_starts_with_any(
+        sql,
+        &[
+            "BEGIN",
+            "START",
+            "COMMIT",
+            "END",
+            "ROLLBACK",
+            "ABORT",
+            "SAVEPOINT",
+            "RELEASE",
+            "PREPARE",
+        ],
+    )
+}
+
+fn contains_destructive_statement(sql: &str) -> bool {
+    statement_starts_with_any(sql, &["DELETE", "DROP", "TRUNCATE"])
+}
+
+fn statement_starts_with_any(sql: &str, keywords: &[&str]) -> bool {
+    use sqlparser::{
+        dialect::PostgreSqlDialect,
+        tokenizer::{Token, Tokenizer},
+    };
+
+    let Ok(tokens) = Tokenizer::new(&PostgreSqlDialect {}, sql).tokenize() else {
+        return false;
+    };
+    let mut statement_start = true;
+    for token in tokens {
+        match token {
+            Token::Whitespace(_) => {}
+            Token::SemiColon => statement_start = true,
+            Token::Word(word) if statement_start => {
+                if keywords
+                    .iter()
+                    .any(|keyword| word.value.eq_ignore_ascii_case(keyword))
+                {
+                    return true;
+                }
+                statement_start = false;
+            }
+            _ if statement_start => statement_start = false,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn copy_to_clipboard(value: &str) -> Result<(), String> {
@@ -2314,6 +2443,76 @@ mod tests {
         assert_eq!(history[0].sql, "SELECT now();");
         assert_eq!(history[0].duration_ms, Some(12));
         assert!(history[0].success);
+    }
+
+    #[tokio::test]
+    async fn whole_buffer_transaction_is_submitted_as_one_script() {
+        let mut app = app();
+        app.connection = ConnectionState::Connected;
+        app.query = "CREATE TABLE demo (id bigint);\nINSERT INTO demo VALUES (1);".into();
+
+        app.update(Action::RunBufferTransaction).await;
+
+        assert!(app.query_running);
+        assert_eq!(app.focus, Focus::Results);
+        assert_eq!(app.running_statement.as_deref(), Some(app.query.as_str()));
+    }
+
+    #[tokio::test]
+    async fn whole_buffer_transaction_rejects_manual_transaction_control() {
+        let mut app = app();
+        app.connection = ConnectionState::Connected;
+        app.query = "BEGIN;\nCREATE TABLE demo (id bigint);\nCOMMIT;".into();
+
+        app.update(Action::RunBufferTransaction).await;
+
+        assert!(!app.query_running);
+        assert!(
+            app.error
+                .as_deref()
+                .is_some_and(|message| message.contains("Remove BEGIN/COMMIT/ROLLBACK"))
+        );
+    }
+
+    #[tokio::test]
+    async fn transaction_success_refreshes_schema_and_records_history() {
+        let mut app = app();
+        app.database_name = Some("project_db".into());
+        app.query_running = true;
+        app.running_statement = Some("CREATE TABLE demo (id bigint);".into());
+        let catalog = DatabaseCatalog {
+            schemas: vec![crate::database::SchemaCatalog {
+                name: "public".into(),
+                tables: vec!["demo".into()],
+                ..crate::database::SchemaCatalog::default()
+            }],
+        };
+
+        app.handle_database_event(DatabaseEvent::TransactionFinished {
+            elapsed: Duration::from_millis(15),
+            completion_items: vec!["demo.id".into()],
+            relation_items: vec!["demo".into()],
+            catalog,
+        });
+
+        assert!(!app.query_running);
+        assert_eq!(app.catalog.schemas[0].tables, vec!["demo"]);
+        assert_eq!(
+            app.result.as_ref().unwrap().rows[0][0],
+            "committed atomically"
+        );
+        assert_eq!(app.storage.history("project_db", 10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn transaction_control_detection_ignores_strings_and_comments() {
+        assert!(contains_transaction_control("SELECT 1; COMMIT;"));
+        assert!(!contains_transaction_control(
+            "SELECT 'BEGIN; COMMIT'; -- ROLLBACK\nSELECT 2;"
+        ));
+        assert!(contains_destructive_statement(
+            "CREATE TABLE demo (id bigint); DELETE FROM demo;"
+        ));
     }
 
     #[test]

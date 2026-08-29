@@ -21,6 +21,14 @@ pub fn map_key_event(
         return Some(Action::Quit);
     }
 
+    if key
+        .modifiers
+        .contains(KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+        && key.code == KeyCode::Enter
+    {
+        return Some(Action::RunBufferTransaction);
+    }
+
     if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Enter {
         return Some(Action::RunQuery);
     }
@@ -223,6 +231,7 @@ pub fn map_key_event(
         }
         return match (pending, key.code) {
             (' ', KeyCode::Char('r')) => Some(Action::RunQuery),
+            (' ', KeyCode::Char('R')) => Some(Action::RunBufferTransaction),
             (' ', KeyCode::Char('n')) => Some(Action::NewQueryTab),
             (' ', KeyCode::Char('e')) => Some(Action::ToggleExplorer),
             (' ', KeyCode::Char('?')) => Some(Action::ToggleHelp),
@@ -574,6 +583,38 @@ mod tests {
                 false,
             ),
             Some(Action::RunQuery)
+        );
+    }
+
+    #[test]
+    fn control_shift_enter_runs_buffer_as_transaction() {
+        let mut sequence = None;
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Enter, KeyModifiers::CONTROL | KeyModifiers::SHIFT,),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::RunBufferTransaction)
+        );
+    }
+
+    #[test]
+    fn leader_uppercase_r_runs_buffer_as_transaction() {
+        let mut sequence = Some(' ');
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('R'), KeyModifiers::SHIFT),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::RunBufferTransaction)
         );
     }
 

@@ -8,6 +8,7 @@ pub enum Action {
     DeleteSelection,
     YankSelection,
     RunQuery,
+    RunBufferTransaction,
     ToggleHelp,
     FocusNext,
     FocusPrevious,
