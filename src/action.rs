@@ -63,6 +63,7 @@ pub enum Action {
     OpenSavedQueryFinder,
     OpenHistoryFinder,
     OpenTableFinder,
+    OpenSchemaDiagram,
     OverlayInsert(char),
     OverlayBackspace,
     OverlayNext,

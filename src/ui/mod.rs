@@ -782,6 +782,7 @@ fn draw_which_key(frame: &mut Frame, app: &App) {
                 ("r", "run statement"),
                 ("R", "run buffer transaction"),
                 ("e", "toggle explorer"),
+                ("d", "+database"),
                 ("f", "+find"),
                 ("b", "+buffer"),
                 ("?", "help"),
@@ -804,6 +805,7 @@ fn draw_which_key(frame: &mut Frame, app: &App) {
                 ("d", "close query tab"),
             ],
         ),
+        'D' => (" Leader › database ", &[("v", "visualize schema")]),
         'd' if app.focus == Focus::Results => (" Delete result ", &[("d", "delete row safely")]),
         'd' => (" Delete ", &[("d", "delete line")]),
         'y' if app.inspector.is_some() => (
@@ -1191,6 +1193,7 @@ fn draw_help(frame: &mut Frame) {
         key_line("Space f f", "Find saved queries for this database"),
         key_line("Space f h", "Search query history"),
         key_line("Space f t", "Fuzzy-find and inspect a table"),
+        key_line("Space d v", "Open interactive schema diagram in browser"),
         key_line("Space f s", "Save current SQL as a new query"),
         key_line("? / F1", "Open or close this cheat sheet"),
         key_line("q", "Quit from NORMAL mode"),

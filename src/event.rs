@@ -229,6 +229,10 @@ pub fn map_key_event(
             *sequence = Some('b');
             return None;
         }
+        if pending == ' ' && key.code == KeyCode::Char('d') {
+            *sequence = Some('D');
+            return None;
+        }
         return match (pending, key.code) {
             (' ', KeyCode::Char('r')) => Some(Action::RunQuery),
             (' ', KeyCode::Char('R')) => Some(Action::RunBufferTransaction),
@@ -239,6 +243,7 @@ pub fn map_key_event(
             ('f', KeyCode::Char('h')) => Some(Action::OpenHistoryFinder),
             ('f', KeyCode::Char('s')) => Some(Action::SaveQueryAs),
             ('f', KeyCode::Char('t')) => Some(Action::OpenTableFinder),
+            ('D', KeyCode::Char('v')) => Some(Action::OpenSchemaDiagram),
             ('b', KeyCode::Char('d')) => Some(Action::RequestCloseQueryTab),
             ('b', KeyCode::Char('n')) => Some(Action::NextQueryTab),
             ('b', KeyCode::Char('p')) => Some(Action::PreviousQueryTab),
@@ -667,6 +672,36 @@ mod tests {
                 Some(expected)
             );
         }
+    }
+
+    #[test]
+    fn leader_dv_opens_schema_diagram() {
+        let mut sequence = None;
+        for key in [' ', 'd'] {
+            assert_eq!(
+                map_key_event(
+                    KeyEvent::new(KeyCode::Char(key), KeyModifiers::NONE),
+                    &mut sequence,
+                    Mode::Normal,
+                    Focus::Editor,
+                    false,
+                    false,
+                ),
+                None
+            );
+        }
+        assert_eq!(sequence, Some('D'));
+        assert_eq!(
+            map_key_event(
+                KeyEvent::new(KeyCode::Char('v'), KeyModifiers::NONE),
+                &mut sequence,
+                Mode::Normal,
+                Focus::Editor,
+                false,
+                false,
+            ),
+            Some(Action::OpenSchemaDiagram)
+        );
     }
 
     #[test]

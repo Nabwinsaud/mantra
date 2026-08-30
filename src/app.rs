@@ -208,6 +208,7 @@ pub struct App {
     pub completion_forced: bool,
     pub inspector: Option<TableDetails>,
     pub inspector_loading: bool,
+    pub schema_diagram_loading: bool,
     pub inspector_section: InspectorSection,
     pub finder: Option<FinderState>,
     pub save_dialog: Option<SaveDialogState>,
@@ -265,6 +266,7 @@ impl App {
             completion_forced: false,
             inspector: None,
             inspector_loading: false,
+            schema_diagram_loading: false,
             inspector_section: InspectorSection::Columns,
             finder: None,
             save_dialog: None,
@@ -529,6 +531,21 @@ impl App {
             Action::OpenSavedQueryFinder => self.open_finder(FinderKind::SavedQueries),
             Action::OpenHistoryFinder => self.open_finder(FinderKind::History),
             Action::OpenTableFinder => self.open_finder(FinderKind::Tables),
+            Action::OpenSchemaDiagram => {
+                if self.connection != ConnectionState::Connected {
+                    self.status_message =
+                        Some("Connect to PostgreSQL before opening the schema diagram".into());
+                } else if self.schema_diagram_loading {
+                    self.status_message = Some("Schema diagram is already loading".into());
+                } else {
+                    self.schema_diagram_loading = true;
+                    self.status_message = Some("Reading schema relationships…".into());
+                    if self.database.load_schema_diagram().await.is_err() {
+                        self.schema_diagram_loading = false;
+                        self.status_message = Some("Database worker is unavailable".into());
+                    }
+                }
+            }
             Action::OverlayInsert(character) => self.overlay_insert(character),
             Action::OverlayBackspace => self.overlay_backspace(),
             Action::OverlayNext => self.overlay_move(1),
@@ -892,6 +909,26 @@ impl App {
             DatabaseEvent::TableInspectionFailed(message) => {
                 self.inspector_loading = false;
                 self.error = Some(message);
+            }
+            DatabaseEvent::SchemaDiagramLoaded(diagram) => {
+                self.schema_diagram_loading = false;
+                match crate::schema_viewer::open(diagram) {
+                    Ok(launch) if launch.browser_opened => {
+                        self.status_message = Some("Opened schema diagram in your browser".into());
+                    }
+                    Ok(launch) => {
+                        self.status_message =
+                            Some(format!("Schema diagram ready; open {}", launch.url));
+                    }
+                    Err(error) => {
+                        self.status_message =
+                            Some(format!("Could not open schema diagram: {error}"));
+                    }
+                }
+            }
+            DatabaseEvent::SchemaDiagramFailed(message) => {
+                self.schema_diagram_loading = false;
+                self.status_message = Some(format!("Could not load schema diagram: {message}"));
             }
         }
     }

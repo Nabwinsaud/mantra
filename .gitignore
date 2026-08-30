@@ -2,3 +2,4 @@
 /.pgide
 *.log
 .env
+schema-viewer/node_modules

@@ -37,6 +37,45 @@ curl -fsSL https://raw.githubusercontent.com/Nabwinsaud/mantra-packages/main/ins
 See [Mantra Packages](https://github.com/Nabwinsaud/mantra-packages) for signed APT setup,
 repository keys, supported architectures, and packaging details.
 
+### Active development build
+
+The normal Homebrew command installs the latest tagged release. To test unreleased changes from
+the current `main` branch, install the formula's HEAD version instead:
+
+```sh
+brew install --HEAD nabwinsaud/tap/mantra
+```
+
+If the stable release is already installed, switch it to the development build with:
+
+```sh
+brew uninstall nabwinsaud/tap/mantra
+brew install --HEAD nabwinsaud/tap/mantra
+```
+
+Check which Homebrew build is installed:
+
+```sh
+command -v mantra
+brew list --versions mantra
+brew info nabwinsaud/tap/mantra
+```
+
+After later changes are pushed to `main`, update an existing HEAD installation with:
+
+```sh
+brew upgrade --fetch-HEAD nabwinsaud/tap/mantra
+```
+
+HEAD builds are for active testing and may be less stable than tagged releases. Until the next
+version bump, `mantra --version` can still display the previous release number; `brew info` is the
+reliable way to confirm that Homebrew installed HEAD. To return to the stable channel:
+
+```sh
+brew uninstall nabwinsaud/tap/mantra
+brew install nabwinsaud/tap/mantra
+```
+
 ## Run
 
 To run from a source checkout:
@@ -79,6 +118,7 @@ The connection URL is used only in memory and is never displayed or logged.
 - `<leader>ff`: fuzzy-find saved queries for the current project and database
 - `<leader>fh`: fuzzy-find automatically recorded query history
 - `<leader>ft`: fuzzy-find a table and open its inspector
+- `<leader>dv`: open the interactive database schema diagram in your browser
 - `<leader>e`: toggle the Explorer sidebar
 - `<leader>fs`: save the current SQL as a new query instead of updating the opened one
 - `gt` / `gT`: move to the next / previous SQL buffer tab
@@ -173,5 +213,17 @@ table at startup.
 - `p`: preview the first 100 rows with a safely quoted generated query
 - `Esc`: close the inspector and return to the Explorer
 - `Ctrl-C` or `q` in normal mode: quit
+
+## Schema diagram
+
+Press `<leader>dv` (Space, `d`, `v`) to read the connected PostgreSQL database's tables, columns,
+primary keys, unique keys, and foreign-key relationships, then open an interactive ER diagram in
+your default browser. The viewer supports pan and zoom, automatic layered layout, schema filters,
+table/column search with `/`, relationship highlighting, a minimap for larger schemas, and a
+detailed table inspector.
+
+The viewer binds to a random localhost port and uses an unguessable URL for the current Mantra
+process. Database credentials are never placed in the URL or sent to an external service. The
+frontend is embedded in the Mantra binary, so packaged installations do not require Node.js.
 - Arrow keys: move the editor cursor
 - Backspace/Enter: edit while in insert mode

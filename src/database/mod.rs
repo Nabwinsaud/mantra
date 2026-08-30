@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use serde::Serialize;
 use tokio::sync::mpsc;
 use tokio_postgres::{
     Client, Column, NoTls, Row,
@@ -81,6 +82,48 @@ pub struct TableIndex {
     pub definition: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct SchemaDiagram {
+    pub database: String,
+    pub tables: Vec<DiagramTable>,
+    pub relationships: Vec<DiagramRelationship>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagramTable {
+    pub schema: String,
+    pub name: String,
+    pub kind: String,
+    pub estimated_rows: i64,
+    pub columns: Vec<DiagramColumn>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagramColumn {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub default: Option<String>,
+    pub comment: Option<String>,
+    pub primary_key: bool,
+    pub unique: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DiagramRelationship {
+    pub name: String,
+    pub source_schema: String,
+    pub source_table: String,
+    pub source_columns: Vec<String>,
+    pub target_schema: String,
+    pub target_table: String,
+    pub target_columns: Vec<String>,
+    pub source_optional: bool,
+    pub source_unique: bool,
+    pub on_update: String,
+    pub on_delete: String,
+}
+
 #[derive(Debug)]
 pub enum DatabaseEvent {
     Connected {
@@ -100,6 +143,8 @@ pub enum DatabaseEvent {
     QueryFailed(String),
     TableInspected(TableDetails),
     TableInspectionFailed(String),
+    SchemaDiagramLoaded(SchemaDiagram),
+    SchemaDiagramFailed(String),
 }
 
 enum DatabaseCommand {
@@ -107,6 +152,7 @@ enum DatabaseCommand {
     Execute(String),
     ExecuteTransaction(String),
     InspectTable { schema: String, table: String },
+    LoadSchemaDiagram,
 }
 
 #[derive(Clone)]
@@ -275,6 +321,26 @@ impl DatabaseService {
                             }
                         }
                     }
+                    DatabaseCommand::LoadSchemaDiagram => {
+                        let Some(active_client) = client.as_ref() else {
+                            let _ = events_tx
+                                .send(DatabaseEvent::SchemaDiagramFailed("not connected".into()))
+                                .await;
+                            continue;
+                        };
+                        match load_schema_diagram(active_client).await {
+                            Ok(diagram) => {
+                                let _ = events_tx
+                                    .send(DatabaseEvent::SchemaDiagramLoaded(diagram))
+                                    .await;
+                            }
+                            Err(error) => {
+                                let _ = events_tx
+                                    .send(DatabaseEvent::SchemaDiagramFailed(safe_error(&error)))
+                                    .await;
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -315,6 +381,13 @@ impl DatabaseService {
     ) -> Result<(), mpsc::error::SendError<()>> {
         self.commands
             .send(DatabaseCommand::InspectTable { schema, table })
+            .await
+            .map_err(|_| mpsc::error::SendError(()))
+    }
+
+    pub async fn load_schema_diagram(&self) -> Result<(), mpsc::error::SendError<()>> {
+        self.commands
+            .send(DatabaseCommand::LoadSchemaDiagram)
             .await
             .map_err(|_| mpsc::error::SendError(()))
     }
@@ -702,6 +775,200 @@ async fn load_catalog(client: &Client) -> DatabaseCatalog {
     DatabaseCatalog {
         schemas: schemas.into_values().collect(),
     }
+}
+
+async fn load_schema_diagram(client: &Client) -> Result<SchemaDiagram, tokio_postgres::Error> {
+    let database = client
+        .query_one("SELECT current_database()", &[])
+        .await?
+        .get::<_, String>(0);
+    let table_rows = client
+        .query(
+            "
+            SELECT
+                n.nspname,
+                c.relname,
+                CASE c.relkind
+                    WHEN 'r' THEN 'table'
+                    WHEN 'p' THEN 'partitioned table'
+                    WHEN 'v' THEN 'view'
+                    WHEN 'm' THEN 'materialized view'
+                    WHEN 'f' THEN 'foreign table'
+                    ELSE 'relation'
+                END,
+                GREATEST(c.reltuples, 0)::bigint
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname NOT LIKE 'pg_toast%'
+            ORDER BY n.nspname, c.relname
+            ",
+            &[],
+        )
+        .await?;
+    let mut tables = BTreeMap::<String, DiagramTable>::new();
+    for row in table_rows {
+        let schema = row.get::<_, String>(0);
+        let name = row.get::<_, String>(1);
+        tables.insert(
+            format!("{schema}.{name}"),
+            DiagramTable {
+                schema,
+                name,
+                kind: row.get(2),
+                estimated_rows: row.get(3),
+                columns: Vec::new(),
+            },
+        );
+    }
+
+    let column_rows = client
+        .query(
+            "
+            SELECT
+                n.nspname,
+                c.relname,
+                a.attname,
+                format_type(a.atttypid, a.atttypmod),
+                NOT a.attnotnull,
+                pg_get_expr(ad.adbin, ad.adrelid),
+                col_description(c.oid, a.attnum),
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint con
+                    WHERE con.conrelid = c.oid
+                      AND con.contype = 'p'
+                      AND a.attnum = ANY(con.conkey)
+                ),
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint con
+                    WHERE con.conrelid = c.oid
+                      AND con.contype = 'u'
+                      AND cardinality(con.conkey) = 1
+                      AND a.attnum = ANY(con.conkey)
+                )
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_attribute a ON a.attrelid = c.oid
+            LEFT JOIN pg_attrdef ad ON ad.adrelid = c.oid AND ad.adnum = a.attnum
+            WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+              AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND n.nspname NOT LIKE 'pg_toast%'
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+            ORDER BY n.nspname, c.relname, a.attnum
+            ",
+            &[],
+        )
+        .await?;
+    for row in column_rows {
+        let schema = row.get::<_, String>(0);
+        let table = row.get::<_, String>(1);
+        if let Some(entry) = tables.get_mut(&format!("{schema}.{table}")) {
+            entry.columns.push(DiagramColumn {
+                name: row.get(2),
+                data_type: row.get(3),
+                nullable: row.get(4),
+                default: row.get(5),
+                comment: row.get(6),
+                primary_key: row.get(7),
+                unique: row.get(8),
+            });
+        }
+    }
+
+    let relationship_rows = client
+        .query(
+            "
+            SELECT
+                con.conname,
+                source_ns.nspname,
+                source_table.relname,
+                array_agg(source_column.attname::text ORDER BY source_key.ordinality)::text[],
+                target_ns.nspname,
+                target_table.relname,
+                array_agg(target_column.attname::text ORDER BY source_key.ordinality)::text[],
+                bool_or(NOT source_column.attnotnull),
+                EXISTS (
+                    SELECT 1
+                    FROM pg_constraint uniqueness
+                    WHERE uniqueness.conrelid = con.conrelid
+                      AND uniqueness.contype IN ('p', 'u')
+                      AND uniqueness.conkey = con.conkey
+                ),
+                CASE con.confupdtype
+                    WHEN 'a' THEN 'NO ACTION'
+                    WHEN 'r' THEN 'RESTRICT'
+                    WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL'
+                    WHEN 'd' THEN 'SET DEFAULT'
+                END,
+                CASE con.confdeltype
+                    WHEN 'a' THEN 'NO ACTION'
+                    WHEN 'r' THEN 'RESTRICT'
+                    WHEN 'c' THEN 'CASCADE'
+                    WHEN 'n' THEN 'SET NULL'
+                    WHEN 'd' THEN 'SET DEFAULT'
+                END
+            FROM pg_constraint con
+            JOIN pg_class source_table ON source_table.oid = con.conrelid
+            JOIN pg_namespace source_ns ON source_ns.oid = source_table.relnamespace
+            JOIN pg_class target_table ON target_table.oid = con.confrelid
+            JOIN pg_namespace target_ns ON target_ns.oid = target_table.relnamespace
+            JOIN LATERAL unnest(con.conkey) WITH ORDINALITY
+                AS source_key(attnum, ordinality) ON TRUE
+            JOIN LATERAL unnest(con.confkey) WITH ORDINALITY
+                AS target_key(attnum, ordinality)
+                ON target_key.ordinality = source_key.ordinality
+            JOIN pg_attribute source_column
+                ON source_column.attrelid = con.conrelid
+               AND source_column.attnum = source_key.attnum
+            JOIN pg_attribute target_column
+                ON target_column.attrelid = con.confrelid
+               AND target_column.attnum = target_key.attnum
+            WHERE con.contype = 'f'
+              AND source_ns.nspname NOT IN ('pg_catalog', 'information_schema')
+              AND source_ns.nspname NOT LIKE 'pg_toast%'
+            GROUP BY
+                con.oid,
+                con.conname,
+                source_ns.nspname,
+                source_table.relname,
+                target_ns.nspname,
+                target_table.relname,
+                con.conrelid,
+                con.conkey,
+                con.confupdtype,
+                con.confdeltype
+            ORDER BY source_ns.nspname, source_table.relname, con.conname
+            ",
+            &[],
+        )
+        .await?;
+    let relationships = relationship_rows
+        .into_iter()
+        .map(|row| DiagramRelationship {
+            name: row.get(0),
+            source_schema: row.get(1),
+            source_table: row.get(2),
+            source_columns: row.get(3),
+            target_schema: row.get(4),
+            target_table: row.get(5),
+            target_columns: row.get(6),
+            source_optional: row.get(7),
+            source_unique: row.get(8),
+            on_update: row.get(9),
+            on_delete: row.get(10),
+        })
+        .collect();
+
+    Ok(SchemaDiagram {
+        database,
+        tables: tables.into_values().collect(),
+        relationships,
+    })
 }
 
 async fn inspect_table(

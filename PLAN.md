@@ -108,6 +108,7 @@ turning a table view into an unreviewable mutation tool.
 - [ ] Improve wide-result rendering with column pinning and horizontal scroll indicators
 - [ ] Add CSV, JSON, Markdown, and SQL export commands
 - [ ] Add EXPLAIN/EXPLAIN ANALYZE plan viewing
+- [x] Add a local browser-based interactive ER schema diagram (`<leader>dv`)
 - [ ] Add transaction, session, lock, and active-query panels
 - [ ] Add connection profiles without storing plaintext passwords
 - [ ] Add integration tests against disposable PostgreSQL versions

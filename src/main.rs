@@ -2,6 +2,7 @@ mod action;
 mod app;
 mod database;
 mod event;
+mod schema_viewer;
 mod sql;
 mod storage;
 mod terminal;

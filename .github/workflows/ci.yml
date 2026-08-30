@@ -8,7 +8,17 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: schema-viewer/package-lock.json
+      - run: npm ci
+        working-directory: schema-viewer
+      - run: npm run build
+        working-directory: schema-viewer
+      - run: git diff --exit-code -- schema-viewer/dist/index.html
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
